@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>聊天室</title>
+    <title>3B班聊天室</title>
     <script>
         if (localStorage.getItem('chat_username')) {
             document.documentElement.style.visibility = 'hidden';
@@ -22,6 +22,7 @@
         let currentGroupId = "";
         let myGroups = JSON.parse(localStorage.getItem('chat_mygroups') || "[]"); 
         let currentGroupInfo = {};
+        let actionTargetName = ""; 
 
         function getDeviceId() {
             let dId = localStorage.getItem('chat_device_id');
@@ -38,7 +39,7 @@
                 const devSnap = await get(ref(db, 'banned_devices/' + myDeviceId));
                 if (devSnap.exists()) {
                     document.documentElement.style.visibility = 'visible';
-                    document.body.innerHTML = `<div style="height:100vh; display:flex; flex-direction:column; justify-content:center; align-items:center; background:#050505; padding:20px; text-align:center;"><h1 style="color:#ff3b30; font-size:32px; margin-bottom:20px;">🚫 设备已被永久封禁</h1><p style="color:#aaa; font-size:16px;">管理员已永久禁止该设备访问本站。</p></div>`;
+                    document.body.innerHTML = `<div style="height:100vh; display:flex; flex-direction:column; justify-content:center; align-items:center; background:#050505; padding:20px; text-align:center;"><h1 style="color:#ff3b30; font-size:32px; margin-bottom:20px;">🚫 设备已被永久封禁</h1></div>`;
                     return; 
                 }
             } catch (e) {}
@@ -246,7 +247,10 @@
                 if (snap.exists()) return alert("🚫 你已被全网封杀，无法发言！");
                 get(ref(db, `groups/${currentGroupId}/muted/${myName}`)).then((muteSnap) => {
                     if (muteSnap.exists() && muteSnap.val() > Date.now()) {
-                        const left = Math.ceil((muteSnap.val() - Date.now()) / 60000);
+                        // 如果禁言时间超过了 9999 年，就显示为“永久禁言”
+                        const remain = muteSnap.val() - Date.now();
+                        if (remain > 315360000000) return alert(`🚫 你已被永久禁言！`);
+                        const left = Math.ceil(remain / 60000);
                         return alert(`🚫 你已被禁言，还剩 ${left} 分钟！`);
                     }
                     push(ref(db, `groups/${currentGroupId}/messages`), { sender: myName, text: text, time: Date.now() });
@@ -256,7 +260,6 @@
         }
         window.handleEnter = function(e) { if (e.key === 'Enter') sendMsg(); }
 
-        // 🌟 核心修复：渲染消息时，检测是否被禁言，如果被禁言给出“解除”按钮
         function addMessageToUI(sender, text) {
             if (!text) return;
             const isMe = (sender === myName);
@@ -280,24 +283,14 @@
                 const iAmAdmin = (currentGroupInfo.admins && currentGroupInfo.admins.includes(myName));
                 const canManage = (iAmOwner || iAmAdmin) && !isMe && !isBoss;
 
-                // 检查这个发消息的人是不是被禁言了
-                let actionBtns = "";
                 if (canManage) {
-                    get(ref(db, `groups/${currentGroupId}/muted/${sender}`)).then(muteSnap => {
-                        if (muteSnap.exists() && muteSnap.val() > Date.now()) {
-                            // 已被禁言，显示解除按钮
-                            div.querySelector('.action-area').innerHTML = `<button onclick="unmuteUser('${sender}')" style="padding: 4px 10px; font-size: 12px; background: #07c160; color: white; border: none; border-radius: 4px; cursor: pointer;">解除禁言</button>`;
-                        } else {
-                            // 未被禁言，显示禁言按钮
-                            div.querySelector('.action-area').innerHTML = `<button onclick="muteUser('${sender}')" style="padding: 4px 10px; font-size: 12px; background: #f39c12; color: white; border: none; border-radius: 4px; cursor: pointer;">禁言</button>`;
-                        }
-                    });
+                    div.style.cursor = "pointer";
+                    div.onclick = () => showActionModal(sender);
                 }
 
                 div.innerHTML = `
                     <div class="msg-name">${!isMe ? nameTag : '我'}</div>
                     <div class="msg-text" style="${bubbleStyle}">${text}</div>
-                    <div class="action-area" style="margin-top: 5px;"></div>
                 `;
             }
             const box = document.getElementById('chatContent');
@@ -305,91 +298,99 @@
             setTimeout(() => { box.scrollTop = box.scrollHeight; }, 50);
         }
 
-        window.muteUser = function(name) {
-            const time = prompt(`禁言【${name}】多少分钟？(输入数字，例如10)`);
-            if(!time || isNaN(time)) return;
-            const muteUntil = Date.now() + (parseInt(time) * 60000);
-            set(ref(db, `groups/${currentGroupId}/muted/${name}`), muteUntil).then(() => {
-                push(ref(db, `groups/${currentGroupId}/messages`), { sender: "📢 系统提示", text: `${name} 被禁言 ${time} 分钟`, time: Date.now() });
-                alert(`已禁言 ${name}！`);
-            });
-        }
-
-        // 解除禁言
-        window.unmuteUser = function(name) {
-            if(!confirm(`确定要解除对【${name}】的禁言吗？`)) return;
-            remove(ref(db, `groups/${currentGroupId}/muted/${name}`)).then(() => {
-                push(ref(db, `groups/${currentGroupId}/messages`), { sender: "📢 系统提示", text: `${name} 已被解除禁言`, time: Date.now() });
-                alert(`已解除 ${name} 的禁言！`);
-            });
-        }
-
-        window.openGroupSettings = function() {
-            document.getElementById('settingsModal').style.display = 'flex';
-            document.getElementById('displayGroupId').innerText = currentGroupId;
-            loadMemberList();
-        }
-        window.closeSettings = function() { document.getElementById('settingsModal').style.display = 'none'; }
-
-        function loadMemberList() {
-            const memberListEl = document.getElementById('memberList');
-            memberListEl.innerHTML = '<div style="text-align:center; color:#888; padding:10px;">正在扫描成员...</div>';
-            const membersSet = new Set();
-            get(ref(db, `groups/${currentGroupId}/messages`)).then((snapshot) => {
-                if(snapshot.exists()) {
-                    snapshot.forEach((msg) => {
-                        const sender = msg.val().sender;
-                        if(!sender.includes("作者") && !sender.includes("📢")) membersSet.add(sender);
-                    });
-                }
-                membersSet.add(currentGroupInfo.creator);
-                membersSet.add(myName);
-
-                memberListEl.innerHTML = '';
-                const iAmOwner = (myName === currentGroupInfo.creator);
-
-                membersSet.forEach(member => {
-                    const isMemberBoss = (member === currentGroupInfo.creator);
-                    const isMemberAdmin = (currentGroupInfo.admins && currentGroupInfo.admins.includes(member));
-                    let tag = isMemberBoss ? "👑 群主" : (isMemberAdmin ? "🛡️ 管理员" : "");
-
-                    const clickAction = iAmOwner && !isMemberBoss && member !== myName ? `onclick="openMemberAction('${member}')"` : '';
-
-                    const row = document.createElement('div');
-                    row.style = `display:flex; justify-content:space-between; align-items:center; padding:10px; border-bottom:1px solid #eee; ${clickAction ? 'cursor:pointer;' : ''}`;
-                    row.innerHTML = `
-                        <div ${clickAction}>
-                            <span style="font-weight:bold; color:#333;">${member}</span> 
-                            <span style="font-size:12px; color:#f39c12;">${tag}</span>
-                        </div>
-                        ${iAmOwner && !isMemberBoss && member !== myName ? '<span style="font-size:12px; color:#999;">点此操作 ›</span>' : ''}
-                    `;
-                    memberListEl.appendChild(row);
-                });
-            });
-        }
-
-        window.openMemberAction = function(member) {
-            const isAdmin = currentGroupInfo.admins.includes(member);
-            const action = confirm(`对【${member}】的操作：\n\n点击“确定” = ${isAdmin ? '撤销管理员' : '设为管理员'}\n点击“取消” = 踢出群聊`);
+        window.showActionModal = function(targetName) {
+            actionTargetName = targetName;
+            const isTargetAdmin = currentGroupInfo.admins.includes(targetName);
             
-            if (action) {
-                let newAdmins;
-                if (isAdmin) newAdmins = currentGroupInfo.admins.filter(a => a !== member);
-                else newAdmins = [...currentGroupInfo.admins, member];
-                
-                update(ref(db, 'group_info/' + currentGroupId), { admins: newAdmins }).then(() => {
-                    push(ref(db, `groups/${currentGroupId}/messages`), { sender: "📢 系统提示", text: isAdmin ? `${member} 被撤销了管理员` : `${member} 被设为管理员`, time: Date.now() });
-                    loadMemberList();
-                });
-            } else {
-                if(confirm(`⚠️ 再次确认：将【${member}】踢出群聊？`)) {
-                    set(ref(db, `groups/${currentGroupId}/kicked/${member}`), true).then(() => {
-                        push(ref(db, `groups/${currentGroupId}/messages`), { sender: "📢 系统提示", text: `${member} 已被踢出`, time: Date.now() });
-                        loadMemberList();
-                    });
+            document.getElementById('btnSetAdmin').innerText = isTargetAdmin ? '撤销管理员' : '设为管理员';
+            document.getElementById('btnSetAdmin').onclick = isTargetAdmin ? removeAdminTarget : addAdminTarget;
+            
+            get(ref(db, `groups/${currentGroupId}/muted/${targetName}`)).then(muteSnap => {
+                const btnMute = document.getElementById('btnMute');
+                if (muteSnap.exists() && muteSnap.val() > Date.now()) {
+                    btnMute.innerText = '解除禁言';
+                    btnMute.style.background = '#07c160';
+                    btnMute.onclick = unmuteTarget;
+                } else {
+                    btnMute.innerText = '禁言该用户';
+                    btnMute.style.background = '#f39c12';
+                    btnMute.onclick = muteTarget;
                 }
+            });
+
+            document.getElementById('modalTargetName').innerText = targetName;
+            document.getElementById('actionModal').style.display = 'flex';
+        }
+
+        // 🌟 科学记数法时间解析引擎
+        window.parseTimeInput = function(input) {
+            if (!input) return 0;
+            input = input.trim().toLowerCase();
+            
+            // 如果包含 e+99，或者 e 且后面数字大于 30，说明是天文数字，直接返回 100 年（作为永久）
+            if (input.includes('e+') || input.includes('e')) {
+                const numPart = parseFloat(input.replace(/[^0-9.e+]/g, ''));
+                if (isNaN(numPart)) return 3153600000000; // 默认 100 年
+                if (numPart > 1e+10) return 3153600000000; // 如果超过 100 亿，直接按永久算
             }
+
+            let num = parseFloat(input);
+            if (isNaN(num)) num = 0;
+            
+            if (input.includes('m')) return num * 60 * 1000;
+            if (input.includes('h')) return num * 60 * 60 * 1000;
+            if (input.includes('d')) return num * 24 * 60 * 60 * 1000;
+            return num * 60 * 1000; 
+        }
+
+        window.muteTarget = function() {
+            const timeStr = prompt(`禁言【${actionTargetName}】多久？\n支持格式：1m(分钟), 1h(小时), 1d(天)\n可输入无限大，例如: 1e+99d (相当于永久禁言)`);
+            if(!timeStr) return;
+            
+            const ms = parseTimeInput(timeStr);
+            if (ms === 0) return alert("时间格式错误！");
+
+            const muteUntil = Date.now() + ms;
+            set(ref(db, `groups/${currentGroupId}/muted/${actionTargetName}`), muteUntil).then(() => {
+                push(ref(db, `groups/${currentGroupId}/messages`), { sender: "📢 系统提示", text: `${actionTargetName} 被禁言 ${timeStr}`, time: Date.now() });
+                closeActionModal();
+            });
+        }
+
+        window.unmuteTarget = function() {
+            remove(ref(db, `groups/${currentGroupId}/muted/${actionTargetName}`)).then(() => {
+                push(ref(db, `groups/${currentGroupId}/messages`), { sender: "📢 系统提示", text: `${actionTargetName} 已被解除禁言`, time: Date.now() });
+                closeActionModal();
+            });
+        }
+
+        window.addAdminTarget = function() {
+            if (myName !== currentGroupInfo.creator) return alert("只有群主才能设管理员！");
+            update(ref(db, 'group_info/' + currentGroupId), { admins: [...currentGroupInfo.admins, actionTargetName] }).then(() => {
+                push(ref(db, `groups/${currentGroupId}/messages`), { sender: "📢 系统提示", text: `${actionTargetName} 被设为管理员`, time: Date.now() });
+                closeActionModal();
+            });
+        }
+
+        window.removeAdminTarget = function() {
+            if (myName !== currentGroupInfo.creator) return alert("只有群主才能撤管理员！");
+            const newAdmins = currentGroupInfo.admins.filter(a => a !== actionTargetName);
+            update(ref(db, 'group_info/' + currentGroupId), { admins: newAdmins }).then(() => {
+                push(ref(db, `groups/${currentGroupId}/messages`), { sender: "📢 系统提示", text: `${actionTargetName} 被撤销管理员`, time: Date.now() });
+                closeActionModal();
+            });
+        }
+
+        window.kickTarget = function() {
+            if(!confirm(`⚠️ 确定将【${actionTargetName}】踢出群聊吗？`)) return;
+            set(ref(db, `groups/${currentGroupId}/kicked/${actionTargetName}`), true).then(() => {
+                push(ref(db, `groups/${currentGroupId}/messages`), { sender: "📢 系统提示", text: `${actionTargetName} 已被踢出`, time: Date.now() });
+                closeActionModal();
+            });
+        }
+
+        window.closeActionModal = function() {
+            document.getElementById('actionModal').style.display = 'none';
         }
 
         window.copyGroupId = function() { navigator.clipboard.writeText(currentGroupId).then(() => { alert("群号已复制！"); }); }
@@ -414,13 +415,13 @@
         .header-left { display: flex; align-items: center; gap: 10px; }
         .header h1 { font-size: 18px; color: #000; margin: 0;}
         .leave-btn { background: none; border: none; color: #007aff; font-size: 16px; cursor: pointer; }
-        .settings-btn { background: none; border: none; font-size: 20px; cursor: pointer; }
         .chat-content { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 15px; -webkit-overflow-scrolling: touch; }
         .msg { display: flex; flex-direction: column; max-width: 80%; }
         .msg.mine { align-self: flex-end; align-items: flex-end; }
         .msg.theirs { align-self: flex-start; align-items: flex-start; }
         .msg-name { font-size: 12px; color: #888; margin-bottom: 5px; }
-        .msg-text { padding: 12px 16px; border-radius: 12px; font-size: 16px; line-height: 1.4; word-break: break-all;}
+        .msg-text { padding: 12px 16px; border-radius: 12px; font-size: 16px; line-height: 1.4; word-break: break-all; transition: background 0.2s;}
+        .msg.theirs .msg-text:hover { background: #e5e5e5; }
         .msg.mine .msg-text { background: #95ec69; color: #000; border-top-right-radius: 2px; }
         .msg.theirs .msg-text { background: #fff; color: #000; border-top-left-radius: 2px; }
         .admin-glow { background: linear-gradient(135deg, #ff3b30, #ff007f) !important; color: #fff !important; font-weight: bold; box-shadow: 0 0 15px rgba(255, 59, 48, 0.8), 0 0 30px rgba(255, 0, 127, 0.5) !important; animation: pulse 2s infinite; }
@@ -428,17 +429,17 @@
         .input-area { padding: 15px; background: #f7f7f7; border-top: 1px solid #ddd; display: flex; gap: 10px; flex-shrink: 0; padding-bottom: calc(15px + env(safe-area-inset-bottom)); }
         .input-area input { flex: 1; padding: 12px; border-radius: 8px; border: none; background: #fff; outline: none; font-size:16px;}
         .input-area button { padding: 0 25px; border-radius: 8px; background: #07c160; color: white; border: none; font-weight: bold; font-size:16px;}
-        #settingsModal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); display: none; justify-content: center; align-items: center; z-index: 999; }
-        .modal-box { background: #fff; width: 85%; max-width: 320px; padding: 20px; border-radius: 12px; max-height: 80vh; overflow-y: auto;}
-        .modal-box h3 { margin-bottom: 15px; text-align: center; }
-        .modal-box input { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 15px; outline: none; font-size:16px;}
-        .modal-box button { width: 100%; padding: 12px; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; margin-bottom: 10px; }
-        .member-list { margin-top: 10px; border-top: 1px solid #eee; padding-top: 10px; }
+
+        #actionModal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); display: none; justify-content: center; align-items: center; z-index: 999; }
+        .action-box { background: #fff; width: 80%; max-width: 300px; padding: 20px; border-radius: 12px; display: flex; flex-direction: column; gap: 10px; }
+        .action-box h3 { text-align: center; margin-bottom: 5px; color: #333; }
+        .action-box button { padding: 12px; border: none; border-radius: 8px; font-weight: bold; font-size: 15px; cursor: pointer; }
+        .btn-close { background: #eee; color: #333; margin-top: 10px; }
     </style>
 </head>
 <body>
     <div id="loginScreen">
-        <h1 style="color:#07c160; margin-bottom:30px;">聊天室</h1>
+        <h1 style="color:#07c160; margin-bottom:30px;">3B班聊天室</h1>
         <input type="text" id="username" placeholder="输入账号" style="width:100%; max-width:300px; padding:15px; border:1px solid #ddd; border-radius:8px; margin-bottom:15px; outline:none; font-size:16px;">
         <input type="password" id="password" placeholder="输入密码" style="width:100%; max-width:300px; padding:15px; border:1px solid #ddd; border-radius:8px; margin-bottom:15px; outline:none; font-size:16px;">
         <button onclick="loginOrRegister()" style="width:100%; max-width:300px; padding:15px; background:#07c160; color:white; border:none; border-radius:8px; font-weight:bold; font-size:16px; margin-bottom: 15px;">登录 / 注册</button>
@@ -461,7 +462,6 @@
     <div id="chatScreen">
         <div class="header">
             <div class="header-left"><button class="leave-btn" onclick="goLobby()">〈 大厅</button><h1 id="displayGroupName">群聊</h1></div>
-            <button class="settings-btn" onclick="openGroupSettings()">⚙️</button>
         </div>
         <div class="chat-content" id="chatContent"></div>
         <div class="input-area">
@@ -470,16 +470,14 @@
         </div>
     </div>
 
-    <div id="settingsModal">
-        <div class="modal-box">
-            <h3>群聊设置</h3>
-            <div style="background: #f0f0f0; padding: 10px; border-radius: 8px; margin-bottom: 15px; text-align: center; font-size: 14px;">
-                群号：<strong id="displayGroupId" style="color: #007aff; font-size: 18px;"></strong>
-                <button onclick="copyGroupId()" style="width: auto; padding: 5px 10px; margin: 5px auto 0; display: block; background: #007aff; color: white; font-size: 12px; border-radius:4px; border:none;">一键复制</button>
-            </div>
-            <div class="member-list"><h4 style="margin-bottom: 10px; color:#333; font-size:15px; text-align:left;">群成员管理</h4><div id="memberList"></div></div>
-            <button onclick="leaveGroup()" style="background: #ffebeb; color: #ff3b30; border: 1px solid #ffcccc; margin-top: 20px;">退出群聊</button>
-            <button onclick="closeSettings()" style="background: #eee; color: #333; margin-top: 5px;">关闭</button>
+    <!-- 操作弹窗 -->
+    <div id="actionModal">
+        <div class="action-box">
+            <h3>对 <span id="modalTargetName" style="color:#007aff;"></span> 操作</h3>
+            <button id="btnSetAdmin" style="background: #007aff; color: white;"></button>
+            <button id="btnMute" style="background: #f39c12; color: white;"></button>
+            <button onclick="kickTarget()" style="background: #ff3b30; color: white;">踢出群聊</button>
+            <button class="btn-close" onclick="closeActionModal()">取消</button>
         </div>
     </div>
 </body>
