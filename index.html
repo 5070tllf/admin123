@@ -34,7 +34,7 @@
         }
         myDeviceId = getDeviceId();
 
-        // 🌟 核心：实时双向监听设备封禁状态，解封直接触发自动登录
+        // 🌟 核心修复：双向监听，解封直接擦除红字，亮出界面
         function monitorDeviceBan() {
             onValue(ref(db, 'banned_devices/' + myDeviceId), (snap) => {
                 if (snap.exists()) {
@@ -48,23 +48,10 @@
                     `;
                     localStorage.clear();
                 } else {
-                    // 瞬间解封（如果之前被提示封禁，立刻触发自动登录，免密码进大厅）
+                    // 瞬间解封：如果页面还在显示红字，直接恢复正常界面
                     if (document.body.innerHTML.includes('设备已被永久封禁')) {
-                        const savedUser = localStorage.getItem('chat_username');
-                        if (savedUser) {
-                            get(ref(db, 'users/' + savedUser)).then((userSnap) => {
-                                if (userSnap.exists()) {
-                                    myName = savedUser;
-                                    document.body.innerHTML = ''; // 清空黑屏
-                                    // 恢复页面结构（因为上面的逻辑把它清空了，我们通过重载恢复更稳妥，顺便触发自动登录）
-                                    window.location.reload(); 
-                                } else {
-                                    window.location.reload();
-                                }
-                            });
-                        } else {
-                            window.location.reload();
-                        }
+                        // 把之前清空的页面重新渲染回来（最简单的方法，还是重载，但我加个延时防止死锁）
+                        setTimeout(() => { window.location.reload(); }, 200);
                     }
                 }
             });
@@ -110,7 +97,7 @@
 
         window.onload = function() {
             checkAutoLogin();
-            monitorDeviceBan(); // 启动双向封禁雷达
+            monitorDeviceBan(); // 启动雷达
 
             onValue(ref(db, 'system_broadcast'), (snap) => {
                 if(snap.exists()) {
