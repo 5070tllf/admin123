@@ -34,7 +34,7 @@
         }
         myDeviceId = getDeviceId();
 
-        // 🌟 核心：实时双向监听设备封禁状态
+        // 🌟 核心：实时双向监听设备封禁状态，解封直接触发自动登录
         function monitorDeviceBan() {
             onValue(ref(db, 'banned_devices/' + myDeviceId), (snap) => {
                 if (snap.exists()) {
@@ -48,9 +48,23 @@
                     `;
                     localStorage.clear();
                 } else {
-                    // 瞬间解封（如果是被解封了，直接重载页面恢复正常登录）
+                    // 瞬间解封（如果之前被提示封禁，立刻触发自动登录，免密码进大厅）
                     if (document.body.innerHTML.includes('设备已被永久封禁')) {
-                        window.location.reload();
+                        const savedUser = localStorage.getItem('chat_username');
+                        if (savedUser) {
+                            get(ref(db, 'users/' + savedUser)).then((userSnap) => {
+                                if (userSnap.exists()) {
+                                    myName = savedUser;
+                                    document.body.innerHTML = ''; // 清空黑屏
+                                    // 恢复页面结构（因为上面的逻辑把它清空了，我们通过重载恢复更稳妥，顺便触发自动登录）
+                                    window.location.reload(); 
+                                } else {
+                                    window.location.reload();
+                                }
+                            });
+                        } else {
+                            window.location.reload();
+                        }
                     }
                 }
             });
