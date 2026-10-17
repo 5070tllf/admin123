@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>3B班聊天室</title>
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getDatabase, ref, push, onChildAdded, query, limitToLast, get, set } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+
+        const firebaseConfig = { databaseURL: "https://class3b-5b39b-default-rtdb.asia-southeast1.firebasedatabase.app" };
+        const app = initializeApp(firebaseConfig);
+        const db = getDatabase(app);
+
+        let myName = "";
+        let currentGroupId = "";
+        let chatRef = null;
+
+        // 页面加载时检查记忆
+        window.onload = function() {
+            const savedUser = localStorage.getItem('chat_username');
+            const savedGroup = localStorage.getItem('chat_groupid');
+            
+            if (savedUser) {
+                document.getElementById('username').value = savedUser;
+            }
+
+            // 如果以前登录过，并且有进群记录，直接秒进聊天室！
+            if (savedUser && savedGroup) {
+                myName = savedUser;
+                document.getElementById('currentUser').innerText = myName;
+                enterChat(savedGroup, true); // true 代表是自动恢复的
+            }
+        }
+
+        // 登录/注册逻辑
+        window.loginOrRegister = function() {
+            const user = document.getElementById('username').value.trim();
+            const pass = document.getElementById('password').value.trim();
+            if (!user || !pass) return alert('账号和密码不能为空！');
+
+            const encryptedPass = btoa(pass);
+
+            get(ref(db, 'users/' + user)).then((snapshot) => {
+                if (snapshot.exists()) {
+                    const data = snapshot.val();
+                    if (data.password === encryptedPass) {
+                        myName = user;
+                        goToGroupScreen();
+                    } else {
+                        alert('密码错误，请重新输入！');
+                    }
+                } else {
+                    if(confirm("检测到新账号，是否使用此账号注册？")) {
+                        set(ref(db, 'users/' + user), { password: encryptedPass }).then(() => {
+                            alert('注册成功！已自动为你登录。');
+                            myName = user;
+                            goToGroupScreen();
+                        });
+                    }
+                }
+            });
+        }
+
+        function goToGroupScreen() {
+            localStorage.setItem('chat_username', myName); 
+            document.getElementById('loginScreen').style.display = 'none';
+            document.getElementById('groupScreen').style.display = 'flex';
+        }
+
+        // 建群
+        window.createGroup = function() {
+            const groupId = Math.floor(1000 + Math.random() * 9000).toString();
+            alert("创建成功！你的专属群号是：" + groupId + "\n快把群号发给同学加入吧！");
+            enterChat(groupId);
+        }
+
+        // 加群
+        window.joinGroup = function() {
+            const groupId = document.getElementById('joinGroupId').value.trim();
+            if (!groupId) return alert('请输入群号！');
+            enterChat(groupId);
+        }
+
+        // 退出群聊（清空记忆）
+        window.leaveGroup = function() {
+            if(confirm("确定要退出当前群聊吗？")) {
+                localStorage.removeItem('chat_groupid');
+                window.location.reload();
+            }
+        }
+
+        // 进入聊天核心逻辑
+        function enterChat(groupId, isAutoRestore = false) {
+            currentGroupId = groupId;
+            
+            // 记住这个群，下次打开直接进
+            localStorage.setItem('chat_groupid', groupId);
+
+            // 隐藏前面的界面
+            document.getElementById('loginScreen').style.display = 'none';
+            document.getElementById('groupScreen').style.display = 'none';
+            
+            // 显示聊天界面
+            document.getElementById('chatScreen').style.display = 'flex';
+            document.getElementById('displayGroupId').innerText = groupId;
+            document.getElementById('currentUser').innerText = myName;
+            
+            // 如果是自动恢复的，清空一下聊天框防止重复
+            if(isAutoRestore) {
+                document.getElementById('chatContent').innerHTML = '';
+            }
+
+            chatRef = query(ref(db, `groups/${groupId}`), limitToLast(50));
+            onChildAdded(chatRef, (snapshot) => {
+                const data = snapshot.val();
+                addMessageToUI(data.sender, data.text);
+            });
+        }
+
+        // 发送消息
+        window.sendMsg = function() {
+            const text = document.getElementById('msgInput').value.trim();
+            if (!text) return;
+
+            get(ref(db, 'banned/' + myName)).then((snapshot) => {
+                if (snapshot.exists()) {
+                    alert("【系统提示】你已被管理员全网封杀，无法发言！");
+                } else {
+                    push(ref(db, `groups/${currentGroupId}`), { sender: myName, text: text, time: Date.now() });
+                    document.getElementById('msgInput').value = '';
+                }
+            });
+        }
+
+        window.handleEnter = function(e) { if (e.key === 'Enter') sendMsg(); }
+
+        function addMessageToUI(sender, text) {
+            const isMe = (sender === myName);
+            const div = document.createElement('div');
+            div.className = `msg ${isMe ? 'mine' : 'theirs'}`;
+            
+            const isAdmin = sender === "📢 系统管理员";
+            if(isAdmin) div.className = 'msg theirs admin-msg';
+
+            div.innerHTML = `
+                <div class="msg-name">${!isMe ? sender : '我'}</div>
+                <div class="msg-text">${text}</div>
+            `;
+            
+            document.getElementById('chatContent').appendChild(div);
+            document.getElementById('chatContent').scrollTop = document.getElementById('chatContent').scrollHeight;
+        }
+    </script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, sans-serif; -webkit-tap-highlight-color: transparent; }
+        body { background: #ededed; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+        
+        #loginScreen, #groupScreen { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; background: #fff; padding: 30px; }
+        h1 { color: #07c160; margin-bottom: 30px; }
+        input { width: 100%; max-width: 300px; padding: 15px; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 15px; outline: none; font-size: 16px; text-align: center; }
+        button { width: 100%; max-width: 300px; padding: 15px; background: #07c160; color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; margin-bottom: 10px; }
+        
+        #chatScreen { display: none; flex: 1; flex-direction: column; }
+        .header { background: #ededed; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ddd; }
+        .header-left { display: flex; align-items: center; gap: 10px; }
+        .header h1 { font-size: 18px; color: #000; margin: 0;}
+        .leave-btn { background: none; border: none; color: #ff3b30; font-size: 14px; padding: 0; margin: 0; cursor: pointer; }
+        .header .user { font-size: 14px; color: #07c160; font-weight: bold; }
+        
+        .chat-content { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 15px; }
+        .msg { display: flex; flex-direction: column; max-width: 80%; }
+        .msg.mine { align-self: flex-end; align-items: flex-end; }
+        .msg.theirs { align-self: flex-start; align-items: flex-start; }
+        .msg-name { font-size: 12px; color: #888; margin-bottom: 5px; }
+        .msg-text { padding: 12px 16px; border-radius: 12px; font-size: 16px; line-height: 1.4; word-break: break-all;}
+        .msg.mine .msg-text { background: #95ec69; color: #000; border-top-right-radius: 2px; }
+        .msg.theirs .msg-text { background: #fff; color: #000; border-top-left-radius: 2px; }
+        .admin-msg .msg-text { background: #ff3b30; color: white; font-weight: bold;}
+        
+        .input-area { padding: 15px; background: #f7f7f7; border-top: 1px solid #ddd; display: flex; gap: 10px; padding-bottom: 30px; }
+        .input-area input { margin: 0; text-align: left; padding: 12px; border-radius: 8px; border: none; background: #fff; }
+        .input-area button { margin: 0; padding: 0 25px; border-radius: 8px; }
+    </style>
+</head>
+<body>
+    <!-- 登录页 -->
+    <div id="loginScreen">
+        <h1>3B班聊天室</h1>
+        <input type="text" id="username" placeholder="输入账号 (如: 张三)">
+        <input type="password" id="password" placeholder="输入密码">
+        <button onclick="loginOrRegister()">登录 / 注册</button>
+    </div>
+
+    <!-- 选群页 -->
+    <div id="groupScreen" style="display: none;">
+        <h1>群聊大厅</h1>
+        <button onclick="createGroup()" style="background: #007aff;">创建新群聊</button>
+        <p style="color: #888; font-size: 14px; margin: 10px 0;">—— 或者 ——</p>
+        <input type="text" id="joinGroupId" placeholder="输入群号加入">
+        <button onclick="joinGroup()">进入群聊</button>
+    </div>
+
+    <!-- 聊天页 -->
+    <div id="chatScreen">
+        <div class="header">
+            <div class="header-left">
+                <!-- 增加了一个退出群聊按钮 -->
+                <button class="leave-btn" onclick="leaveGroup()">〈 退出</button>
+                <h1>群聊：<span id="displayGroupId"></span></h1>
+            </div>
+            <div class="user" id="currentUser"></div>
+        </div>
+        <div class="chat-content" id="chatContent"></div>
+        <div class="input-area">
+            <input type="text" id="msgInput" placeholder="输入消息..." onkeypress="handleEnter(event)">
+            <button onclick="sendMsg()">发送</button>
+        </div>
+    </div>
+</body>
+</html>
