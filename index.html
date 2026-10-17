@@ -4,14 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>聊天室</title>
-    
-    <!-- 提前隐藏页面，防止登录框闪现 -->
     <script>
-        if (localStorage.getItem('chat_username')) {
-            document.documentElement.style.visibility = 'hidden';
-        }
+        // 页面一加载，立刻隐藏所有东西，防止闪屏
+        document.documentElement.style.visibility = 'hidden';
     </script>
-
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
         import { getDatabase, ref, push, onChildAdded, onValue, query, limitToLast, get, set, update, remove } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
@@ -27,41 +23,37 @@
         let typingTimeout = null;
         let isTyping = false;
 
-        // 核心：免密自动登录逻辑
-        async function initApp() {
+        window.onload = function() {
+            // 1. 先判断本地有没有存过账号名
             const savedUser = localStorage.getItem('chat_username');
 
             if (savedUser) {
-                // 去云端查一下这号还在不在
-                try {
-                    const snapshot = await get(ref(db, 'users/' + savedUser));
-                    
+                // 2. 如果有，直接去云端拿数据。只要云端有这个账号，不问密码，直接进！
+                get(ref(db, 'users/' + savedUser)).then((snapshot) => {
                     if (snapshot.exists()) {
-                        // 号还在，直接进入
                         myName = savedUser;
                         document.documentElement.style.visibility = 'visible';
                         showScreen('lobbyScreen');
                         renderLobby();
                     } else {
-                        // 号被作者删了，退回登录
+                        // 如果云端号被抹除了，清空记忆，回登录页
                         localStorage.removeItem('chat_username');
+                        localStorage.removeItem('chat_mygroups');
                         document.documentElement.style.visibility = 'visible';
                         showScreen('loginScreen');
                     }
-                } catch (e) {
-                    // 断网了，退回登录
+                }).catch((error) => {
+                    // 万一网络抽风，回登录页
                     document.documentElement.style.visibility = 'visible';
                     showScreen('loginScreen');
-                }
+                });
             } else {
+                // 如果本地连名字都没存过，直接去登录页
                 document.documentElement.style.visibility = 'visible';
                 showScreen('loginScreen');
             }
-        }
-
-        window.onload = function() {
-            initApp();
             
+            // 监听广播
             if (sessionStorage.getItem('alerted_delete_users')) {
                 localStorage.clear();
                 showScreen('loginScreen');
@@ -104,8 +96,8 @@
                 if (snapshot.exists()) {
                     if (snapshot.val().password === encryptedPass) {
                         myName = user;
-                        // 只记账号，不记密码了，因为不需要了
-                        localStorage.setItem('chat_username', myName); 
+                        // 登录成功，死死记住账号名字
+                        localStorage.setItem('chat_username', myName);
                         showScreen('lobbyScreen');
                         renderLobby();
                     } else alert('密码错误！');
@@ -113,6 +105,7 @@
                     if(confirm("检测到新账号，是否注册？")) {
                         set(ref(db, 'users/' + user), { password: encryptedPass }).then(() => {
                             myName = user;
+                            // 注册成功，死死记住账号名字
                             localStorage.setItem('chat_username', myName);
                             showScreen('lobbyScreen');
                             renderLobby();
@@ -122,12 +115,11 @@
             });
         }
 
-        // 注销时才会清空账号记忆
         window.deleteAccount = function() {
             if(!confirm("⚠️ 警告：确定要注销当前账号吗？")) return;
             remove(ref(db, 'users/' + myName)).then(() => {
                 alert("账号已注销。");
-                localStorage.clear(); // 彻底清空
+                localStorage.clear(); // 注销时彻底清除本地记忆
                 window.location.reload();
             });
         }
@@ -423,8 +415,8 @@
 <body>
     <div id="loginScreen">
         <div style="flex:1; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:30px;">
-           -bottom <h1 style="color:#07c160; margin-bottom:30px;">聊天室</h1>
-            <input type="text" id="username" placeholder="输入账号" style="width:100%; max-width:300px; padding:15px; border:1px solid #ddd; border-radius:8px; margin:15px; outline:none;">
+            <h1 style="color:#07c160; margin-bottom:30px;">聊天室</h1>
+            <input type="text" id="username" placeholder="输入账号" style="width:100%; max-width:300px; padding:15px; border:1px solid #ddd; border-radius:8px; margin-bottom:15px; outline:none;">
             <input type="password" id="password" placeholder="输入密码" style="width:100%; max-width:300px; padding:15px; border:1px solid #ddd; border-radius:8px; margin-bottom:15px; outline:none;">
             <button onclick="loginOrRegister()" style="width:100%; max-width:300px; padding:15px; background:#07c160; color:white; border:none; border-radius:8px; font-weight:bold; font-size:16px;">登录 / 注册</button>
         </div>
