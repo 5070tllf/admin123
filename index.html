@@ -3,9 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>聊天室</title>
+    <title>3B班聊天室</title>
     <script>
-        // 提前隐藏，防闪屏
         if (localStorage.getItem('chat_username')) {
             document.documentElement.style.visibility = 'hidden';
         }
@@ -25,33 +24,30 @@
         let typingTimeout = null;
         let isTyping = false;
 
-        // 🌟 核心引擎：无限自动登录循环（带防卡死保护）
-        async function forceAutoLogin() {
+        // 🌟 核心：智能自动登录与一键登录按钮
+        async function checkAutoLogin() {
             const savedUser = localStorage.getItem('chat_username');
 
             if (savedUser) {
-                while (true) {
-                    try {
-                        const snapshot = await get(ref(db, 'users/' + savedUser));
-                        
-                        if (snapshot.exists()) {
-                            myName = savedUser;
-                            document.documentElement.style.visibility = 'visible';
-                            showScreen('lobbyScreen');
-                            renderLobby();
-                            break; // 成功，跳出循环
-                        } else {
-                            // 账号不存在了（被注销），清空记忆，回登录页
-                            localStorage.removeItem('chat_username');
-                            localStorage.removeItem('chat_mygroups');
-                            document.documentElement.style.visibility = 'visible';
-                            showScreen('loginScreen');
-                            setupOneClickLogin(); // 更新下方按钮
-                            break; 
-                        }
-                    } catch (error) {
-                        await new Promise(r => setTimeout(r, 500));
+                try {
+                    const snapshot = await get(ref(db, 'users/' + savedUser));
+                    if (snapshot.exists()) {
+                        myName = savedUser;
+                        document.documentElement.style.visibility = 'visible';
+                        showScreen('lobbyScreen');
+                        renderLobby();
+                    } else {
+                        // 账号被注销了
+                        localStorage.removeItem('chat_username');
+                        localStorage.removeItem('chat_mygroups');
+                        document.documentElement.style.visibility = 'visible';
+                        showScreen('loginScreen');
+                        setupOneClickLogin(); 
                     }
+                } catch (error) {
+                    document.documentElement.style.visibility = 'visible';
+                    showScreen('loginScreen');
+                    setupOneClickLogin(); 
                 }
             } else {
                 document.documentElement.style.visibility = 'visible';
@@ -60,19 +56,17 @@
             }
         }
 
-        // 页面加载时的准备
         window.onload = function() {
-            forceAutoLogin();
+            checkAutoLogin();
 
-            if (sessionStorage.getItem('alerted_delete_users')) {
-                localStorage.clear();
-                showScreen('loginScreen');
-                return;
-            }
-
+            // 带有时间戳的广播防弹窗机制
             onValue(ref(db, 'system_broadcast'), (snap) => {
                 if(snap.exists()) {
                     const data = snap.val();
+                    
+                    // 10秒前的旧广播直接忽略
+                    if (Date.now() - data.time > 10000) return;
+
                     if(data.action === "delete_all_users" && !sessionStorage.getItem('alerted_delete_users')) {
                         sessionStorage.setItem('alerted_delete_users', 'true'); 
                         alert("🚨 系统紧急通知：\n管理员已注销所有账号数据，请重新注册！");
@@ -89,7 +83,7 @@
             });
         }
 
-        // 检测是否需要显示“一键登录”按钮
+        // 显示或隐藏下方的一键登录按钮
         function setupOneClickLogin() {
             const savedUser = localStorage.getItem('chat_username');
             const btn = document.getElementById('oneClickLoginBtn');
@@ -101,7 +95,7 @@
             }
         }
 
-        // 一键登录核心逻辑
+        // 点击一键登录
         window.doOneClickLogin = function() {
             const savedUser = localStorage.getItem('chat_username');
             if (!savedUser) return;
@@ -109,7 +103,7 @@
             get(ref(db, 'users/' + savedUser)).then((snapshot) => {
                 if (snapshot.exists()) {
                     myName = savedUser;
-                    sessionStorage.removeItem('alerted_delete_users'); // 清除限制锁
+                    sessionStorage.removeItem('alerted_delete_users'); 
                     showScreen('lobbyScreen');
                     renderLobby();
                 } else {
@@ -456,7 +450,7 @@
 <body>
     <div id="loginScreen">
         <div style="flex:1; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:30px;">
-            <h1 style="color:#07c160; margin-bottom:30px;">聊天室</h1>
+            <h1 style="color:#07c160; margin-bottom:30px;">3B班聊天室</h1>
             <input type="text" id="username" placeholder="输入账号" style="width:100%; max-width:300px; padding:15px; border:1px solid #ddd; border-radius:8px; margin-bottom:15px; outline:none;">
             <input type="password" id="password" placeholder="输入密码" style="width:100%; max-width:300px; padding:15px; border:1px solid #ddd; border-radius:8px; margin-bottom:15px; outline:none;">
             <button onclick="loginOrRegister()" style="width:100%; max-width:300px; padding:15px; background:#07c160; color:white; border:none; border-radius:8px; font-weight:bold; font-size:16px; margin-bottom: 15px;">登录 / 注册</button>
