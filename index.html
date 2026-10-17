@@ -19,18 +19,8 @@
         let typingTimeout = null;
         let isTyping = false;
 
-        window.onload = function() {
-            // 广播监听
-            if (sessionStorage.getItem('alerted_delete_users')) {
-                localStorage.removeItem('chat_username');
-                localStorage.removeItem('chat_mygroups');
-                showScreen('loginScreen');
-                return;
-            }
-            if (sessionStorage.getItem('alerted_delete_groups')) {
-                localStorage.removeItem('chat_mygroups');
-            }
-
+        // 系统通知
+        function listenBroadcast() {
             onValue(ref(db, 'system_broadcast'), (snap) => {
                 if(snap.exists()) {
                     const data = snap.val();
@@ -48,40 +38,61 @@
                     }
                 }
             });
-
-            // 🌟 核心：免密自动登录逻辑
-            const savedUser = localStorage.getItem('chat_username');
-            const savedPass = localStorage.getItem('chat_password');
-
-            if (savedUser && savedPass) {
-                // 如果本地存了账号和密码，直接去云端验证
-                myName = savedUser;
-                const encryptedPass = btoa(savedPass);
-                
-                get(ref(db, 'users/' + myName)).then((snapshot) => {
-                    if (snapshot.exists() && snapshot.val().password === encryptedPass) {
-                        // 验证通过，直接秒进大厅
-                        showScreen('lobbyScreen');
-                        renderLobby();
-                    } else {
-                        // 密码被改了或账号被删了，退回登录界面
-                        localStorage.removeItem('chat_username');
-                        localStorage.removeItem('chat_password');
-                        showScreen('loginScreen');
-                    }
-                });
-            } else {
-                // 没存过密码，去登录界面
-                showScreen('loginScreen');
-            }
         }
 
+        // 显示页面控制
         function showScreen(id) {
             document.getElementById('loginScreen').style.display = 'none';
             document.getElementById('lobbyScreen').style.display = 'none';
             document.getElementById('chatScreen').style.display = 'none';
             document.getElementById(id).style.display = 'flex';
         }
+
+        // 核心：尝试自动登录
+        async function tryAutoLogin() {
+            listenBroadcast();
+            
+            if (sessionStorage.getItem('alerted_delete_users')) {
+                localStorage.removeItem('chat_username');
+                localStorage.removeItem('chat_password');
+                localStorage.removeItem('chat_mygroups');
+                showScreen('loginScreen');
+                return;
+            }
+
+            const savedUser = localStorage.getItem('chat_username');
+            const savedPass = localStorage.getItem('chat_password');
+
+            if (savedUser && savedPass) {
+                // 显示自动登录提示
+                document.getElementById('loginScreen').innerHTML = '<div style="text-align:center; margin-top:50vh; transform:translateY(-50%); font-size:16px; color:#07c160;">正在自动登录...</div>';
+                showScreen('loginScreen');
+
+                try {
+                    const encryptedPass = btoa(savedPass);
+                    const snapshot = await get(ref(db, 'users/' + savedUser));
+                    
+                    if (snapshot.exists() && snapshot.val().password === encryptedPass) {
+                        myName = savedUser;
+                        showScreen('lobbyScreen');
+                        renderLobby();
+                    } else {
+                        // 账号被删或密码错
+                        localStorage.removeItem('chat_username');
+                        localStorage.removeItem('chat_password');
+                        window.location.reload();
+                    }
+                } catch (error) {
+                    console.error("自动登录失败", error);
+                    showScreen('loginScreen');
+                }
+            } else {
+                showScreen('loginScreen');
+            }
+        }
+
+        // 页面加载完毕后立刻执行自动登录逻辑
+        document.addEventListener('DOMContentLoaded', tryAutoLogin);
 
         window.loginOrRegister = function() {
             const user = document.getElementById('username').value.trim();
@@ -93,7 +104,7 @@
                 if (snapshot.exists()) {
                     if (snapshot.val().password === encryptedPass) {
                         myName = user;
-                        // 记住账号和密码
+                        // 存入密码用于自动登录
                         localStorage.setItem('chat_username', myName);
                         localStorage.setItem('chat_password', pass);
                         
@@ -104,7 +115,6 @@
                     if(confirm("检测到新账号，是否注册？")) {
                         set(ref(db, 'users/' + user), { password: encryptedPass }).then(() => {
                             myName = user;
-                            // 记住账号和密码
                             localStorage.setItem('chat_username', myName);
                             localStorage.setItem('chat_password', pass);
                             
@@ -116,12 +126,11 @@
             });
         }
 
-        // 注销时清空所有记忆
         window.deleteAccount = function() {
             if(!confirm("⚠️ 警告：确定要注销当前账号吗？")) return;
             remove(ref(db, 'users/' + myName)).then(() => {
                 alert("账号已注销。");
-                localStorage.clear(); // 彻底清空账号、密码、群列表
+                localStorage.clear();
                 window.location.reload();
             });
         }
