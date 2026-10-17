@@ -20,6 +20,7 @@
         let isTyping = false;
 
         window.onload = function() {
+            // 检查是否已经被作者销毁过
             if (sessionStorage.getItem('alerted_delete_users')) {
                 localStorage.removeItem('chat_username');
                 localStorage.removeItem('chat_mygroups');
@@ -30,6 +31,7 @@
                 localStorage.removeItem('chat_mygroups');
             }
 
+            // 监听作者的全网广播
             onValue(ref(db, 'system_broadcast'), (snap) => {
                 if(snap.exists()) {
                     const data = snap.val();
@@ -48,6 +50,7 @@
                 }
             });
 
+            // 🌟 核心：自动登录记忆功能
             const savedUser = localStorage.getItem('chat_username');
             if (savedUser) {
                 myName = savedUser;
@@ -58,7 +61,7 @@
             }
         }
 
-        // 修复显示逻辑：使用 visibility 或者 hidden 类，最稳妥
+        // 修复页面白屏错乱的核心逻辑
         function showScreen(id) {
             document.getElementById('loginScreen').style.display = 'none';
             document.getElementById('lobbyScreen').style.display = 'none';
@@ -76,7 +79,7 @@
                 if (snapshot.exists()) {
                     if (snapshot.val().password === encryptedPass) {
                         myName = user;
-                        localStorage.setItem('chat_username', myName);
+                        localStorage.setItem('chat_username', myName); // 记住账号
                         showScreen('lobbyScreen');
                         renderLobby();
                     } else alert('密码错误！');
@@ -84,7 +87,7 @@
                     if(confirm("检测到新账号，是否注册？")) {
                         set(ref(db, 'users/' + user), { password: encryptedPass }).then(() => {
                             myName = user;
-                            localStorage.setItem('chat_username', myName);
+                            localStorage.setItem('chat_username', myName); // 记住账号
                             showScreen('lobbyScreen');
                             renderLobby();
                         });
@@ -97,7 +100,7 @@
             if(!confirm("⚠️ 警告：确定要注销当前账号吗？")) return;
             remove(ref(db, 'users/' + myName)).then(() => {
                 alert("账号已注销。");
-                localStorage.clear();
+                localStorage.clear(); // 注销时才会清空记忆
                 window.location.reload();
             });
         }
@@ -346,13 +349,9 @@
         * { margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, sans-serif; }
         body { background: #ededed; height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
         
-        /* 修复显示：默认全部隐藏，通过 JS 控制显示 */
+        /* 核心：默认全部隐藏，靠 JS 唤醒 */
         #loginScreen, #lobbyScreen, #chatScreen { display: none; flex: 1; flex-direction: column; }
-        
-        /* 登录页底色 */
         #loginScreen { background: #fff; }
-        
-        /* 大厅和聊天页背景 */
         #lobbyScreen, #chatScreen { background: #ededed; }
 
         .lobby-header { background: #ededed; padding: 20px; font-size: 20px; font-weight: bold; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ddd;}
@@ -396,7 +395,6 @@
     </style>
 </head>
 <body>
-    <!-- 登录页 -->
     <div id="loginScreen">
         <div style="flex:1; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:30px;">
             <h1 style="color:#07c160; margin-bottom:30px;">聊天室</h1>
@@ -406,7 +404,6 @@
         </div>
     </div>
 
-    <!-- 大厅页 -->
     <div id="lobbyScreen">
         <div class="lobby-header">
             <span>聊天大厅</span>
@@ -425,7 +422,6 @@
         <div class="group-list" id="myGroupList"></div>
     </div>
 
-    <!-- 聊天页 -->
     <div id="chatScreen">
         <div class="header">
             <div class="header-left">
@@ -442,7 +438,6 @@
         </div>
     </div>
 
-    <!-- 设置弹窗 -->
     <div id="settingsModal">
         <div class="modal-box">
             <h3>群聊设置</h3>
