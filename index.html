@@ -14,9 +14,10 @@
 
         let myName = "";
         let currentGroupId = "";
-        let myGroups = JSON.parse(localStorage.getItem('chat_mygroups') || "[]"); // 记住自己加过的群
-        let chatRef = null;
+        let myGroups = JSON.parse(localStorage.getItem('chat_mygroups') || "[]"); 
         let currentGroupInfo = {};
+        let typingTimeout = null;
+        let isTyping = false;
 
         window.onload = function() {
             const savedUser = localStorage.getItem('chat_username');
@@ -36,7 +37,6 @@
             document.getElementById(id).style.display = 'flex';
         }
 
-        // 登录/注册
         window.loginOrRegister = function() {
             const user = document.getElementById('username').value.trim();
             const pass = document.getElementById('password').value.trim();
@@ -64,7 +64,17 @@
             });
         }
 
-        // 渲染大厅（我的群列表）
+        window.deleteAccount = function() {
+            if(confirm("⚠️ 警告：确定要注销当前账号吗？\n你的账号密码将被永久抹除，无法找回！")) {
+                remove(ref(db, 'users/' + myName)).then(() => {
+                    alert("账号已注销。");
+                    localStorage.removeItem('chat_username');
+                    localStorage.removeItem('chat_mygroups');
+                    window.location.reload();
+                });
+            }
+        }
+
         function renderLobby() {
             document.getElementById('myNameDisplay').innerText = myName;
             const listEl = document.getElementById('myGroupList');
@@ -89,21 +99,22 @@
             });
         }
 
-        // 建群
         window.createGroup = function() {
-            const gid = Math.floor(1000 + Math.random() * 9000).toString();
-            const gName = prompt("给群聊起个名字：", myName + "的群聊");
-            if(gName === null) return;
+            const gName = prompt("第一步：请给新群聊起个名字：");
+            if(!gName || gName.trim() === "") {
+                return alert("取消创建：群名不能为空！");
+            }
 
-            set(ref(db, 'group_info/' + gid), { creator: myName, name: gName, admins: [myName] }).then(() => {
-                alert("建群成功！群号：" + gid);
+            const gid = Math.floor(1000 + Math.random() * 9000).toString();
+
+            set(ref(db, 'group_info/' + gid), { creator: myName, name: gName.trim(), admins: [myName] }).then(() => {
+                alert(`🎉 建群成功！\n群名：${gName}\n群号：${gid}\n\n请把群号发给同学加入吧！`);
                 if(!myGroups.includes(gid)) myGroups.push(gid);
                 localStorage.setItem('chat_mygroups', JSON.stringify(myGroups));
                 enterChat(gid);
             });
         }
 
-        // 加群（带验证）
         window.joinGroup = function() {
             const gid = document.getElementById('joinGroupId').value.trim();
             if (!gid) return;
@@ -116,13 +127,11 @@
             });
         }
 
-        // 进入聊天室
         function enterChat(gid) {
             currentGroupId = gid;
             showScreen('chatScreen');
             document.getElementById('chatContent').innerHTML = '';
 
-            // 监听群资料（名字、管理员列表）
             onValue(ref(db, 'group_info/' + gid), (snap) => {
                 if(snap.exists()) {
                     currentGroupInfo = snap.val();
@@ -130,44 +139,81 @@
                 }
             });
 
-            // 监听消息
-            chatRef = query(ref(db, `groups/${gid}`), limitToLast(50));
-            onChildAdded(chatRef, (snapshot) => {
-                addMessageToUI(snapshot.val().sender, snapshot.val().text);
+            const messagesRef = query(ref(db, `groups/${gid}/messages`), limitToLast(50));
+            onValue(messagesRef, (snapshot) => {
+                const box = document.getElementById('chatContent');
+                box.innerHTML = ''; 
+                if (snapshot.exists()) {
+                    snapshot.forEach((childSnapshot) => {
+                        const data = childSnapshot.val();
+                        addMessageToUI(data.sender, data.text);
+                    });
+                }
+            });
+
+            onValue(ref(db, `groups/${gid}/typing`), (snap) => {
+                const typingEl = document.getElementById('typingIndicator');
+                if (snap.exists()) {
+                    const data = snap.val();
+                    const typingUsers = Object.values(data).filter(name => name !== myName);
+                    if (typingUsers.length > 0) {
+                        typingEl.innerText = typingUsers.join(", ") + " 正在输入...";
+                        typingEl.style.display = 'block';
+                    } else {
+                        typingEl.style.display = 'none';
+                    }
+                } else {
+                    typingEl.style.display = 'none';
+                }
             });
         }
 
-        // 返回大厅
         window.goLobby = function() {
+            if(currentGroupId) remove(ref(db, `groups/${currentGroupId}/typing/${myName}`));
             currentGroupId = "";
             showScreen('lobbyScreen');
             renderLobby();
         }
 
-        // 发送消息（带封禁和禁言检测）
-        window.sendMsg = function() {
-            const text = document.getElementById('msgInput').value.trim();
-            if (!text) return;
+        window.handleTyping = function() {
+            if (!currentGroupId) return;
+            const typingRef = ref(db, `groups/${currentGroupId}/typing/${myName}`);
+            
+            if (!isTyping) {
+                isTyping = true;
+                set(typingRef, myName);
+            }
 
-            // 检查被封禁
+            clearTimeout(typingTimeout);
+            typingTimeout = setTimeout(() => {
+                isTyping = false;
+                remove(typingRef);
+            }, 2000); 
+        }
+
+        window.sendMsg = function() {
+            const input = document.getElementById('msgInput');
+            const text = input.value.trim();
+            if (!text) return;
+            
+            if(currentGroupId) remove(ref(db, `groups/${currentGroupId}/typing/${myName}`)); 
+            input.value = '';
+
             get(ref(db, 'banned/' + myName)).then((snap) => {
                 if (snap.exists()) return alert("你已被全网封杀！");
                 
-                // 检查是否被禁言
                 get(ref(db, `groups/${currentGroupId}/muted/${myName}`)).then((muteSnap) => {
                     if (muteSnap.exists() && muteSnap.val() > Date.now()) {
                         const left = Math.ceil((muteSnap.val() - Date.now()) / 60000);
                         return alert(`你已被禁言，还剩 ${left} 分钟！`);
                     }
                     push(ref(db, `groups/${currentGroupId}/messages`), { sender: myName, text: text, time: Date.now() });
-                    document.getElementById('msgInput').value = '';
                 });
             });
         }
 
         window.handleEnter = function(e) { if (e.key === 'Enter') sendMsg(); }
 
-        // 渲染消息
         function addMessageToUI(sender, text) {
             if (!text) return;
             const isMe = (sender === myName);
@@ -179,17 +225,26 @@
             div.innerHTML = `<div class="msg-name">${!isMe ? sender : '我'}</div><div class="msg-text">${text}</div>`;
             const box = document.getElementById('chatContent');
             box.appendChild(div);
-            box.scrollTop = box.scrollHeight;
+            setTimeout(() => { box.scrollTop = box.scrollHeight; }, 50);
         }
 
-        // ================= 群设置与管理员功能 =================
         window.openGroupSettings = function() {
             document.getElementById('settingsModal').style.display = 'flex';
             document.getElementById('newGroupName').value = currentGroupInfo.name || "";
+            // 显示群ID
+            document.getElementById('displayGroupId').innerText = currentGroupId;
         }
         window.closeSettings = function() { document.getElementById('settingsModal').style.display = 'none'; }
 
-        // 修改群名（群主和管理员可用）
+        // 复制群号功能
+        window.copyGroupId = function() {
+            navigator.clipboard.writeText(currentGroupId).then(() => {
+                alert("群号 " + currentGroupId + " 已复制！");
+            }).catch(() => {
+                alert("复制失败，请手动记下群号：" + currentGroupId);
+            });
+        }
+
         window.changeGroupName = function() {
             if (!currentGroupInfo.admins.includes(myName)) return alert("只有群主或管理员才能修改群名！");
             const newName = document.getElementById('newGroupName').value.trim();
@@ -200,7 +255,6 @@
             });
         }
 
-        // 设置管理员（仅群主可用）
         window.addAdmin = function() {
             if (currentGroupInfo.creator !== myName) return alert("只有群主才能设置管理员！");
             const newAdmin = document.getElementById('newAdminName').value.trim();
@@ -217,9 +271,14 @@
         * { margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, sans-serif; }
         body { background: #ededed; height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
         
-        /* 登录 & 大厅 */
         #loginScreen, #lobbyScreen { flex: 1; display: flex; flex-direction: column; background: #fff; }
-        .lobby-header { background: #ededed; padding: 20px; font-size: 20px; font-weight: bold; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ddd;}
+        
+        .lobby-header { 
+            background: #ededed; padding: 20px; font-size: 20px; font-weight: bold; 
+            display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ddd;
+        }
+        .logout-btn { background: none; border: none; color: #ff3b30; font-size: 14px; font-weight: normal; cursor: pointer; }
+        
         .lobby-btns { padding: 20px; display: flex; gap: 10px; background: #fff; border-bottom: 8px solid #ededed;}
         .lobby-btns button { flex: 1; padding: 12px; border: none; border-radius: 8px; font-weight: bold; font-size: 15px; cursor: pointer;}
         .btn-create { background: #007aff; color: white; }
@@ -233,7 +292,6 @@
         .avatar { width: 50px; height: 50px; border-radius: 8px; background: #07c160; display: flex; justify-content: center; align-items: center; font-size: 24px; margin-right: 15px; }
         .info .name { font-size: 17px; font-weight: 500; }
 
-        /* 聊天界面 */
         #chatScreen { display: none; flex: 1; flex-direction: column; min-height: 0; }
         .header { background: #ededed; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ddd; }
         .header-left { display: flex; align-items: center; gap: 10px; }
@@ -255,7 +313,11 @@
         .input-area input { flex: 1; padding: 12px; border-radius: 8px; border: none; background: #fff; outline: none; }
         .input-area button { padding: 0 25px; border-radius: 8px; background: #07c160; color: white; border: none; font-weight: bold; }
 
-        /* 设置弹窗 */
+        #typingIndicator {
+            display: none; font-size: 12px; color: #07c160; padding: 5px 20px; background: #f7f7f7;
+            font-style: italic;
+        }
+
         #settingsModal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); display: none; justify-content: center; align-items: center; z-index: 999; }
         .modal-box { background: #fff; width: 80%; max-width: 300px; padding: 20px; border-radius: 12px; }
         .modal-box h3 { margin-bottom: 15px; text-align: center; }
@@ -264,7 +326,6 @@
     </style>
 </head>
 <body>
-    <!-- 登录页 -->
     <div id="loginScreen">
         <div style="flex:1; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:30px;">
             <h1 style="color:#07c160; margin-bottom:30px;">聊天室</h1>
@@ -274,11 +335,13 @@
         </div>
     </div>
 
-    <!-- 大厅页（微信群聊列表风格） -->
     <div id="lobbyScreen" style="display: none;">
         <div class="lobby-header">
             <span>聊天大厅</span>
-            <span id="myNameDisplay" style="font-size:14px; color:#07c160;"></span>
+            <div style="display:flex; align-items:center; gap:15px;">
+                <span id="myNameDisplay" style="font-size:14px; color:#07c160;"></span>
+                <button class="logout-btn" onclick="deleteAccount()">注销</button>
+            </div>
         </div>
         <div class="lobby-btns">
             <button class="btn-create" onclick="createGroup()">➕ 创建新群聊</button>
@@ -290,7 +353,6 @@
         <div class="group-list" id="myGroupList"></div>
     </div>
 
-    <!-- 聊天页 -->
     <div id="chatScreen">
         <div class="header">
             <div class="header-left">
@@ -300,16 +362,23 @@
             <button class="settings-btn" onclick="openGroupSettings()">⚙️</button>
         </div>
         <div class="chat-content" id="chatContent"></div>
+        <div id="typingIndicator"></div>
         <div class="input-area">
-            <input type="text" id="msgInput" placeholder="输入消息..." onkeypress="handleEnter(event)">
+            <input type="text" id="msgInput" placeholder="输入消息..." oninput="handleTyping()" onkeypress="handleEnter(event)">
             <button onclick="sendMsg()">发送</button>
         </div>
     </div>
 
-    <!-- 群设置弹窗 -->
     <div id="settingsModal">
         <div class="modal-box">
             <h3>群聊设置</h3>
+            
+            <!-- 新增：显示群号并复制 -->
+            <div style="background: #f0f0f0; padding: 10px; border-radius: 8px; margin-bottom: 15px; text-align: center; font-size: 14px;">
+                群号：<strong id="displayGroupId" style="color: #007aff; font-size: 18px;"></strong>
+                <button onclick="copyGroupId()" style="width: auto; padding: 5px 10px; margin: 5px auto 0; display: block; background: #007aff; color: white; font-size: 12px;">一键复制</button>
+            </div>
+
             <input type="text" id="newGroupName" placeholder="修改群名称">
             <button onclick="changeGroupName()" style="background: #007aff; color: white;">保存群名</button>
             
