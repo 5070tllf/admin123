@@ -34,29 +34,33 @@
         }
         myDeviceId = getDeviceId();
 
-        // 🌟 核心：双向监听，解封瞬间恢复无感登录
+        // 🌟 核心修复：统一文本检测，精准捕获解封瞬间
         function monitorDeviceBan() {
             onValue(ref(db, 'banned_devices/' + myDeviceId), (snap) => {
                 if (snap.exists()) {
+                    // 1. 瞬间封禁
                     const currentName = localStorage.getItem('chat_username');
                     if (currentName) sessionStorage.setItem('ghost_username', currentName);
                     
                     document.body.innerHTML = `
-                        <div style="height:100vh; display:flex; flex-direction:column; justify-content:center; align-items:center; background:#050505; padding:20px; text-align:center; z-index:99999; position:fixed; top:0; left:0; width:100%;">
-                            <h1 style="color:#ff3b30; font-size:32px; margin-bottom:20px;">你的数据发生变化,已强行下线！</h1>
+                        <div id="ban-screen" style="height:100vh; display:flex; flex-direction:column; justify-content:center; align-items:center; background:#050505; padding:20px; text-align:center; z-index:99999; position:fixed; top:0; left:0; width:100%;">
+                            <h1 style="color:#ff3b30; font-size:32px; margin-bottom:20px;">🚫 数据异常，已强行下线</h1>
                             <p style="color:#aaa; font-size:16px;">管理员已永久禁止该设备访问本站。</p>
-                            <p style="color:#888; font-size:14px; margin-top:10px;">🚫你的设备已被作者永久封禁进入。</p>
+                            <p style="color:#888; font-size:14px; margin-top:10px;">哪怕您更换账号或重新注册，也无法进入。</p>
                         </div>
                     `;
                     
-                    // 🌟 封禁时：只删账号，绝不清空群聊记录！
+                    // 封禁时：只删账号，保留设备码和群聊记录
                     localStorage.removeItem('chat_username');
                 } else {
-                    if (document.body.innerHTML.includes('设备已被永久封禁')) {
+                    // 2. 瞬间解封
+                    // 只要页面里存在刚才那个红字框（id="ban-screen"），就代表刚刚被解封了！
+                    if (document.getElementById('ban-screen')) {
                         const ghostName = sessionStorage.getItem('ghost_username');
                         if (ghostName) {
                             localStorage.setItem('chat_username', ghostName);
                             sessionStorage.removeItem('ghost_username');
+                            // 强制重载，让 checkAutoLogin 接管，秒进大厅！
                             window.location.reload();
                         } else {
                             window.location.reload();
@@ -71,7 +75,7 @@
                 const devSnap = await get(ref(db, 'banned_devices/' + myDeviceId));
                 if (devSnap.exists()) {
                     document.documentElement.style.visibility = 'visible';
-                    document.body.innerHTML = `<div style="height:100vh; display:flex; flex-direction:column; justify-content:center; align-items:center; background:#050505; padding:20px; text-align:center;"><h1 style="color:#ff3b30; font-size:32px; margin-bottom:20px;">🚫 设备已被永久封禁</h1></div>`;
+                    document.body.innerHTML = `<div id="ban-screen" style="height:100vh; display:flex; flex-direction:column; justify-content:center; align-items:center; background:#050505; padding:20px; text-align:center;"><h1 style="color:#ff3b30; font-size:32px; margin-bottom:20px;">🚫 数据异常，已强行下线</h1></div>`;
                     return; 
                 }
             } catch (e) {}
@@ -87,7 +91,7 @@
                         renderLobby();
                     } else {
                         localStorage.removeItem('chat_username');
-                        localStorage.removeItem('chat_mygroups'); // 号被删了才清空群
+                        localStorage.removeItem('chat_mygroups');
                         document.documentElement.style.visibility = 'visible';
                         showScreen('loginScreen');
                         setupOneClickLogin(); 
@@ -106,7 +110,7 @@
 
         window.onload = function() {
             checkAutoLogin();
-            monitorDeviceBan(); // 启动雷达
+            monitorDeviceBan(); 
 
             onValue(ref(db, 'system_broadcast'), (snap) => {
                 if(snap.exists()) {
