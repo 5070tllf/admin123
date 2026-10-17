@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>聊天室</title>
+    <title>3B班聊天室</title>
     <script>
         if (localStorage.getItem('chat_username')) {
             document.documentElement.style.visibility = 'hidden';
@@ -237,26 +237,18 @@
 
         window.goLobby = function() { currentGroupId = ""; showScreen('lobbyScreen'); renderLobby(); }
 
-        // 🌟 核心修复：发送消息前的终极拦截
         window.sendMsg = function() {
             const input = document.getElementById('msgInput');
             const text = input.value.trim();
             if (!text) return;
 
-            // 第一步：查有没有被全网封杀
             get(ref(db, 'banned/' + myName)).then((snap) => {
-                if (snap.exists()) {
-                    return alert("🚫 你已被全网封杀，无法发言！");
-                }
-                
-                // 第二步：查有没有在【当前群】被禁言
+                if (snap.exists()) return alert("🚫 你已被全网封杀，无法发言！");
                 get(ref(db, `groups/${currentGroupId}/muted/${myName}`)).then((muteSnap) => {
                     if (muteSnap.exists() && muteSnap.val() > Date.now()) {
                         const left = Math.ceil((muteSnap.val() - Date.now()) / 60000);
                         return alert(`🚫 你已被禁言，还剩 ${left} 分钟！`);
                     }
-                    
-                    // 第三步：全都通过，才允许发送
                     push(ref(db, `groups/${currentGroupId}/messages`), { sender: myName, text: text, time: Date.now() });
                     input.value = '';
                 });
@@ -264,7 +256,7 @@
         }
         window.handleEnter = function(e) { if (e.key === 'Enter') sendMsg(); }
 
-        // 渲染消息与权限判断
+        // 🌟 核心修复：渲染消息时，检测是否被禁言，如果被禁言给出“解除”按钮
         function addMessageToUI(sender, text) {
             if (!text) return;
             const isMe = (sender === myName);
@@ -284,18 +276,28 @@
                 let bubbleStyle = "";
                 if (isAdmin && !isMe) bubbleStyle = "background: linear-gradient(135deg, #fff3e0, #ffe0b2); border: 1px solid #ffb74d;";
 
-                // 判断当前登录者有没有权限禁言这个人
                 const iAmOwner = (myName === currentGroupInfo.creator);
                 const iAmAdmin = (currentGroupInfo.admins && currentGroupInfo.admins.includes(myName));
                 const canManage = (iAmOwner || iAmAdmin) && !isMe && !isBoss;
-                
-                // 下方的禁言按钮
-                const muteBtn = canManage ? `<div style="margin-top: 5px;"><button onclick="muteUser('${sender}')" style="padding: 4px 10px; font-size: 12px; background: #f39c12; color: white; border: none; border-radius: 4px; cursor: pointer;">禁言</button></div>` : '';
+
+                // 检查这个发消息的人是不是被禁言了
+                let actionBtns = "";
+                if (canManage) {
+                    get(ref(db, `groups/${currentGroupId}/muted/${sender}`)).then(muteSnap => {
+                        if (muteSnap.exists() && muteSnap.val() > Date.now()) {
+                            // 已被禁言，显示解除按钮
+                            div.querySelector('.action-area').innerHTML = `<button onclick="unmuteUser('${sender}')" style="padding: 4px 10px; font-size: 12px; background: #07c160; color: white; border: none; border-radius: 4px; cursor: pointer;">解除禁言</button>`;
+                        } else {
+                            // 未被禁言，显示禁言按钮
+                            div.querySelector('.action-area').innerHTML = `<button onclick="muteUser('${sender}')" style="padding: 4px 10px; font-size: 12px; background: #f39c12; color: white; border: none; border-radius: 4px; cursor: pointer;">禁言</button>`;
+                        }
+                    });
+                }
 
                 div.innerHTML = `
                     <div class="msg-name">${!isMe ? nameTag : '我'}</div>
                     <div class="msg-text" style="${bubbleStyle}">${text}</div>
-                    ${muteBtn}
+                    <div class="action-area" style="margin-top: 5px;"></div>
                 `;
             }
             const box = document.getElementById('chatContent');
@@ -303,7 +305,6 @@
             setTimeout(() => { box.scrollTop = box.scrollHeight; }, 50);
         }
 
-        // 禁言核心逻辑
         window.muteUser = function(name) {
             const time = prompt(`禁言【${name}】多少分钟？(输入数字，例如10)`);
             if(!time || isNaN(time)) return;
@@ -314,6 +315,15 @@
             });
         }
 
+        // 解除禁言
+        window.unmuteUser = function(name) {
+            if(!confirm(`确定要解除对【${name}】的禁言吗？`)) return;
+            remove(ref(db, `groups/${currentGroupId}/muted/${name}`)).then(() => {
+                push(ref(db, `groups/${currentGroupId}/messages`), { sender: "📢 系统提示", text: `${name} 已被解除禁言`, time: Date.now() });
+                alert(`已解除 ${name} 的禁言！`);
+            });
+        }
+
         window.openGroupSettings = function() {
             document.getElementById('settingsModal').style.display = 'flex';
             document.getElementById('displayGroupId').innerText = currentGroupId;
@@ -321,7 +331,6 @@
         }
         window.closeSettings = function() { document.getElementById('settingsModal').style.display = 'none'; }
 
-        // 渲染群成员列表
         function loadMemberList() {
             const memberListEl = document.getElementById('memberList');
             memberListEl.innerHTML = '<div style="text-align:center; color:#888; padding:10px;">正在扫描成员...</div>';
@@ -360,7 +369,6 @@
             });
         }
 
-        // 弹出单个成员的操作面板
         window.openMemberAction = function(member) {
             const isAdmin = currentGroupInfo.admins.includes(member);
             const action = confirm(`对【${member}】的操作：\n\n点击“确定” = ${isAdmin ? '撤销管理员' : '设为管理员'}\n点击“取消” = 踢出群聊`);
@@ -430,7 +438,7 @@
 </head>
 <body>
     <div id="loginScreen">
-        <h1 style="color:#07c160; margin-bottom:30px;">聊天室</h1>
+        <h1 style="color:#07c160; margin-bottom:30px;">3B班聊天室</h1>
         <input type="text" id="username" placeholder="输入账号" style="width:100%; max-width:300px; padding:15px; border:1px solid #ddd; border-radius:8px; margin-bottom:15px; outline:none; font-size:16px;">
         <input type="password" id="password" placeholder="输入密码" style="width:100%; max-width:300px; padding:15px; border:1px solid #ddd; border-radius:8px; margin-bottom:15px; outline:none; font-size:16px;">
         <button onclick="loginOrRegister()" style="width:100%; max-width:300px; padding:15px; background:#07c160; color:white; border:none; border-radius:8px; font-weight:bold; font-size:16px; margin-bottom: 15px;">登录 / 注册</button>
