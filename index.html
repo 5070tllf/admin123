@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>聊天室app</title>
+    <title>聊天室</title>
     <script>
         if (localStorage.getItem('chat_username')) {
             document.documentElement.style.visibility = 'hidden';
@@ -23,7 +23,6 @@
         let myGroups = JSON.parse(localStorage.getItem('chat_mygroups') || "[]"); 
         let currentGroupInfo = {};
 
-        // 生成设备码
         function getDeviceId() {
             let dId = localStorage.getItem('chat_device_id');
             if (!dId) {
@@ -74,7 +73,6 @@
 
         window.onload = function() {
             checkAutoLogin();
-            // 广播
             onValue(ref(db, 'system_broadcast'), (snap) => {
                 if(snap.exists()) {
                     const data = snap.val();
@@ -239,16 +237,34 @@
 
         window.goLobby = function() { currentGroupId = ""; showScreen('lobbyScreen'); renderLobby(); }
 
+        // 🌟 核心修复：发送消息前的终极拦截
         window.sendMsg = function() {
             const input = document.getElementById('msgInput');
             const text = input.value.trim();
             if (!text) return;
-            input.value = '';
-            push(ref(db, `groups/${currentGroupId}/messages`), { sender: myName, text: text, time: Date.now() });
+
+            // 第一步：查有没有被全网封杀
+            get(ref(db, 'banned/' + myName)).then((snap) => {
+                if (snap.exists()) {
+                    return alert("🚫 你已被全网封杀，无法发言！");
+                }
+                
+                // 第二步：查有没有在【当前群】被禁言
+                get(ref(db, `groups/${currentGroupId}/muted/${myName}`)).then((muteSnap) => {
+                    if (muteSnap.exists() && muteSnap.val() > Date.now()) {
+                        const left = Math.ceil((muteSnap.val() - Date.now()) / 60000);
+                        return alert(`🚫 你已被禁言，还剩 ${left} 分钟！`);
+                    }
+                    
+                    // 第三步：全都通过，才允许发送
+                    push(ref(db, `groups/${currentGroupId}/messages`), { sender: myName, text: text, time: Date.now() });
+                    input.value = '';
+                });
+            });
         }
         window.handleEnter = function(e) { if (e.key === 'Enter') sendMsg(); }
 
-        // 🌟 核心：渲染消息与权限判断（气泡下方带禁言按钮）
+        // 渲染消息与权限判断
         function addMessageToUI(sender, text) {
             if (!text) return;
             const isMe = (sender === myName);
@@ -305,7 +321,7 @@
         }
         window.closeSettings = function() { document.getElementById('settingsModal').style.display = 'none'; }
 
-        // 🌟 渲染群成员列表：点击名字弹出操作框
+        // 渲染群成员列表
         function loadMemberList() {
             const memberListEl = document.getElementById('memberList');
             memberListEl.innerHTML = '<div style="text-align:center; color:#888; padding:10px;">正在扫描成员...</div>';
@@ -328,7 +344,6 @@
                     const isMemberAdmin = (currentGroupInfo.admins && currentGroupInfo.admins.includes(member));
                     let tag = isMemberBoss ? "👑 群主" : (isMemberAdmin ? "🛡️ 管理员" : "");
 
-                    // 只给群主显示点击操作权限
                     const clickAction = iAmOwner && !isMemberBoss && member !== myName ? `onclick="openMemberAction('${member}')"` : '';
 
                     const row = document.createElement('div');
@@ -351,23 +366,15 @@
             const action = confirm(`对【${member}】的操作：\n\n点击“确定” = ${isAdmin ? '撤销管理员' : '设为管理员'}\n点击“取消” = 踢出群聊`);
             
             if (action) {
-                // 设管/撤管
                 let newAdmins;
-                if (isAdmin) {
-                    newAdmins = currentGroupInfo.admins.filter(a => a !== member);
-                } else {
-                    newAdmins = [...currentGroupInfo.admins, member];
-                }
+                if (isAdmin) newAdmins = currentGroupInfo.admins.filter(a => a !== member);
+                else newAdmins = [...currentGroupInfo.admins, member];
+                
                 update(ref(db, 'group_info/' + currentGroupId), { admins: newAdmins }).then(() => {
-                    push(ref(db, `groups/${currentGroupId}/messages`), { 
-                        sender: "📢 系统提示", 
-                        text: isAdmin ? `${member} 被撤销了管理员` : `${member} 被设为管理员`, 
-                        time: Date.now() 
-                    });
+                    push(ref(db, `groups/${currentGroupId}/messages`), { sender: "📢 系统提示", text: isAdmin ? `${member} 被撤销了管理员` : `${member} 被设为管理员`, time: Date.now() });
                     loadMemberList();
                 });
             } else {
-                // 踢人
                 if(confirm(`⚠️ 再次确认：将【${member}】踢出群聊？`)) {
                     set(ref(db, `groups/${currentGroupId}/kicked/${member}`), true).then(() => {
                         push(ref(db, `groups/${currentGroupId}/messages`), { sender: "📢 系统提示", text: `${member} 已被踢出`, time: Date.now() });
