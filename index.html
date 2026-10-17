@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>聊天室</title>
+    <title>3B班聊天室</title>
     <script>
         if (localStorage.getItem('chat_username')) {
             document.documentElement.style.visibility = 'hidden';
@@ -34,11 +34,13 @@
         }
         myDeviceId = getDeviceId();
 
-        // 🌟 核心修复：双向监听，解封直接擦除红字，亮出界面
+        // 🌟 核心：双向监听，解封瞬间恢复无感登录
         function monitorDeviceBan() {
             onValue(ref(db, 'banned_devices/' + myDeviceId), (snap) => {
                 if (snap.exists()) {
-                    // 瞬间封禁
+                    const currentName = localStorage.getItem('chat_username');
+                    if (currentName) sessionStorage.setItem('ghost_username', currentName);
+                    
                     document.body.innerHTML = `
                         <div style="height:100vh; display:flex; flex-direction:column; justify-content:center; align-items:center; background:#050505; padding:20px; text-align:center; z-index:99999; position:fixed; top:0; left:0; width:100%;">
                             <h1 style="color:#ff3b30; font-size:32px; margin-bottom:20px;">🚫 设备已被永久封禁</h1>
@@ -46,12 +48,19 @@
                             <p style="color:#888; font-size:14px; margin-top:10px;">哪怕您更换账号或重新注册，也无法进入。</p>
                         </div>
                     `;
-                    localStorage.clear();
+                    
+                    // 🌟 封禁时：只删账号，绝不清空群聊记录！
+                    localStorage.removeItem('chat_username');
                 } else {
-                    // 瞬间解封：如果页面还在显示红字，直接恢复正常界面
                     if (document.body.innerHTML.includes('设备已被永久封禁')) {
-                        // 把之前清空的页面重新渲染回来（最简单的方法，还是重载，但我加个延时防止死锁）
-                        setTimeout(() => { window.location.reload(); }, 200);
+                        const ghostName = sessionStorage.getItem('ghost_username');
+                        if (ghostName) {
+                            localStorage.setItem('chat_username', ghostName);
+                            sessionStorage.removeItem('ghost_username');
+                            window.location.reload();
+                        } else {
+                            window.location.reload();
+                        }
                     }
                 }
             });
@@ -78,7 +87,7 @@
                         renderLobby();
                     } else {
                         localStorage.removeItem('chat_username');
-                        localStorage.removeItem('chat_mygroups');
+                        localStorage.removeItem('chat_mygroups'); // 号被删了才清空群
                         document.documentElement.style.visibility = 'visible';
                         showScreen('loginScreen');
                         setupOneClickLogin(); 
@@ -106,7 +115,9 @@
                     if(data.action === "delete_all_users" && !sessionStorage.getItem('alerted_delete_users')) {
                         sessionStorage.setItem('alerted_delete_users', 'true'); 
                         alert("🚨 系统紧急通知：\n管理员已注销所有账号数据，请重新注册！");
-                        localStorage.clear(); window.location.reload();
+                        localStorage.clear(); 
+                        myDeviceId = getDeviceId();
+                        window.location.reload();
                     }
                     if(data.action === "global_announcement" && !sessionStorage.getItem('alerted_announce_' + data.time)) {
                         sessionStorage.setItem('alerted_announce_' + data.time, 'true');
@@ -146,7 +157,7 @@
             if (!user || !pass) return alert('账号和密码不能为空！');
 
             get(ref(db, 'banned_devices/' + myDeviceId)).then(devSnap => {
-                if(devSnap.exists()) return alert("🚫 你的设备已被管理员永久封禁，无法注册或登录！");
+                if(devSnap.exists()) return alert("🚫 你的数据发生变化,已强行下线！你的设备已被作者永久封禁");
                 const encryptedPass = btoa(pass);
                 get(ref(db, 'users/' + user)).then((snapshot) => {
                     if (snapshot.exists()) {
@@ -174,9 +185,10 @@
             });
         }
 
+        // 注销时：彻底清空数据
         window.deleteAccount = function() {
             if(!confirm("⚠️ 警告：确定要注销当前账号吗？")) return;
-            remove(ref(db, 'users/' + myName)).then(() => { alert("账号已注销。"); localStorage.clear(); window.location.reload(); });
+            remove(ref(db, 'users/' + myName)).then(() => { alert("账号已注销。"); localStorage.clear(); myDeviceId = getDeviceId(); window.location.reload(); });
         }
 
         function renderLobby() {
@@ -456,7 +468,7 @@
 </head>
 <body>
     <div id="loginScreen">
-        <h1 style="color:#07c160; margin-bottom:30px;">聊天室</h1>
+        <h1 style="color:#07c160; margin-bottom:30px;">3B班聊天室</h1>
         <input type="text" id="username" placeholder="输入账号" style="width:100%; max-width:300px; padding:15px; border:1px solid #ddd; border-radius:8px; margin-bottom:15px; outline:none; font-size:16px;">
         <input type="password" id="password" placeholder="输入密码" style="width:100%; max-width:300px; padding:15px; border:1px solid #ddd; border-radius:8px; margin-bottom:15px; outline:none; font-size:16px;">
         <button onclick="loginOrRegister()" style="width:100%; max-width:300px; padding:15px; background:#07c160; color:white; border:none; border-radius:8px; font-weight:bold; font-size:16px; margin-bottom: 15px;">登录 / 注册</button>
