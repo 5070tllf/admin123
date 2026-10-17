@@ -4,6 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>聊天室</title>
+    
+    <!-- 提前隐藏页面，防止登录框闪现 -->
+    <script>
+        if (localStorage.getItem('chat_username')) {
+            document.documentElement.style.visibility = 'hidden';
+        }
+    </script>
+
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
         import { getDatabase, ref, push, onChildAdded, onValue, query, limitToLast, get, set, update, remove } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
@@ -19,8 +27,47 @@
         let typingTimeout = null;
         let isTyping = false;
 
-        // 系统通知
-        function listenBroadcast() {
+        // 核心：免密自动登录逻辑
+        async function initApp() {
+            const savedUser = localStorage.getItem('chat_username');
+
+            if (savedUser) {
+                // 去云端查一下这号还在不在
+                try {
+                    const snapshot = await get(ref(db, 'users/' + savedUser));
+                    
+                    if (snapshot.exists()) {
+                        // 号还在，直接进入
+                        myName = savedUser;
+                        document.documentElement.style.visibility = 'visible';
+                        showScreen('lobbyScreen');
+                        renderLobby();
+                    } else {
+                        // 号被作者删了，退回登录
+                        localStorage.removeItem('chat_username');
+                        document.documentElement.style.visibility = 'visible';
+                        showScreen('loginScreen');
+                    }
+                } catch (e) {
+                    // 断网了，退回登录
+                    document.documentElement.style.visibility = 'visible';
+                    showScreen('loginScreen');
+                }
+            } else {
+                document.documentElement.style.visibility = 'visible';
+                showScreen('loginScreen');
+            }
+        }
+
+        window.onload = function() {
+            initApp();
+            
+            if (sessionStorage.getItem('alerted_delete_users')) {
+                localStorage.clear();
+                showScreen('loginScreen');
+                return;
+            }
+
             onValue(ref(db, 'system_broadcast'), (snap) => {
                 if(snap.exists()) {
                     const data = snap.val();
@@ -40,59 +87,12 @@
             });
         }
 
-        // 显示页面控制
         function showScreen(id) {
             document.getElementById('loginScreen').style.display = 'none';
             document.getElementById('lobbyScreen').style.display = 'none';
             document.getElementById('chatScreen').style.display = 'none';
             document.getElementById(id).style.display = 'flex';
         }
-
-        // 核心：尝试自动登录
-        async function tryAutoLogin() {
-            listenBroadcast();
-            
-            if (sessionStorage.getItem('alerted_delete_users')) {
-                localStorage.removeItem('chat_username');
-                localStorage.removeItem('chat_password');
-                localStorage.removeItem('chat_mygroups');
-                showScreen('loginScreen');
-                return;
-            }
-
-            const savedUser = localStorage.getItem('chat_username');
-            const savedPass = localStorage.getItem('chat_password');
-
-            if (savedUser && savedPass) {
-                // 显示自动登录提示
-                document.getElementById('loginScreen').innerHTML = '<div style="text-align:center; margin-top:50vh; transform:translateY(-50%); font-size:16px; color:#07c160;">正在自动登录...</div>';
-                showScreen('loginScreen');
-
-                try {
-                    const encryptedPass = btoa(savedPass);
-                    const snapshot = await get(ref(db, 'users/' + savedUser));
-                    
-                    if (snapshot.exists() && snapshot.val().password === encryptedPass) {
-                        myName = savedUser;
-                        showScreen('lobbyScreen');
-                        renderLobby();
-                    } else {
-                        // 账号被删或密码错
-                        localStorage.removeItem('chat_username');
-                        localStorage.removeItem('chat_password');
-                        window.location.reload();
-                    }
-                } catch (error) {
-                    console.error("自动登录失败", error);
-                    showScreen('loginScreen');
-                }
-            } else {
-                showScreen('loginScreen');
-            }
-        }
-
-        // 页面加载完毕后立刻执行自动登录逻辑
-        document.addEventListener('DOMContentLoaded', tryAutoLogin);
 
         window.loginOrRegister = function() {
             const user = document.getElementById('username').value.trim();
@@ -104,10 +104,8 @@
                 if (snapshot.exists()) {
                     if (snapshot.val().password === encryptedPass) {
                         myName = user;
-                        // 存入密码用于自动登录
-                        localStorage.setItem('chat_username', myName);
-                        localStorage.setItem('chat_password', pass);
-                        
+                        // 只记账号，不记密码了，因为不需要了
+                        localStorage.setItem('chat_username', myName); 
                         showScreen('lobbyScreen');
                         renderLobby();
                     } else alert('密码错误！');
@@ -116,8 +114,6 @@
                         set(ref(db, 'users/' + user), { password: encryptedPass }).then(() => {
                             myName = user;
                             localStorage.setItem('chat_username', myName);
-                            localStorage.setItem('chat_password', pass);
-                            
                             showScreen('lobbyScreen');
                             renderLobby();
                         });
@@ -126,11 +122,12 @@
             });
         }
 
+        // 注销时才会清空账号记忆
         window.deleteAccount = function() {
             if(!confirm("⚠️ 警告：确定要注销当前账号吗？")) return;
             remove(ref(db, 'users/' + myName)).then(() => {
                 alert("账号已注销。");
-                localStorage.clear();
+                localStorage.clear(); // 彻底清空
                 window.location.reload();
             });
         }
@@ -426,8 +423,8 @@
 <body>
     <div id="loginScreen">
         <div style="flex:1; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:30px;">
-            <h1 style="color:#07c160; margin-bottom:30px;">聊天室</h1>
-            <input type="text" id="username" placeholder="输入账号" style="width:100%; max-width:300px; padding:15px; border:1px solid #ddd; border-radius:8px; margin-bottom:15px; outline:none;">
+           -bottom <h1 style="color:#07c160; margin-bottom:30px;">聊天室</h1>
+            <input type="text" id="username" placeholder="输入账号" style="width:100%; max-width:300px; padding:15px; border:1px solid #ddd; border-radius:8px; margin:15px; outline:none;">
             <input type="password" id="password" placeholder="输入密码" style="width:100%; max-width:300px; padding:15px; border:1px solid #ddd; border-radius:8px; margin-bottom:15px; outline:none;">
             <button onclick="loginOrRegister()" style="width:100%; max-width:300px; padding:15px; background:#07c160; color:white; border:none; border-radius:8px; font-weight:bold; font-size:16px;">登录 / 注册</button>
         </div>
