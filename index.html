@@ -24,9 +24,8 @@
         let currentGroupInfo = {};
         let typingTimeout = null;
         let isTyping = false;
-        let isBroadcastSetup = false; // 防止广播重复绑定的锁
 
-        // 🌟 核心修复：无限自动登录循环
+        // 🌟 核心引擎：无限自动登录循环（带防卡死保护）
         async function forceAutoLogin() {
             const savedUser = localStorage.getItem('chat_username');
 
@@ -42,12 +41,13 @@
                             renderLobby();
                             break; // 成功，跳出循环
                         } else {
-                            // 账号不存在了，清空记忆，停止循环
+                            // 账号不存在了（被注销），清空记忆，回登录页
                             localStorage.removeItem('chat_username');
                             localStorage.removeItem('chat_mygroups');
                             document.documentElement.style.visibility = 'visible';
                             showScreen('loginScreen');
-                            break; // 停止
+                            setupOneClickLogin(); // 更新下方按钮
+                            break; 
                         }
                     } catch (error) {
                         await new Promise(r => setTimeout(r, 500));
@@ -56,39 +56,66 @@
             } else {
                 document.documentElement.style.visibility = 'visible';
                 showScreen('loginScreen');
+                setupOneClickLogin();
             }
         }
 
+        // 页面加载时的准备
         window.onload = function() {
-            // 1. 先启动自动登录
             forceAutoLogin();
 
-            // 2. 检查是否被全局注销/删群（使用强锁定，弹过一次死也不弹）
-            if (sessionStorage.getItem('alerted_delete_users') || sessionStorage.getItem('alerted_delete_groups')) {
-                if (sessionStorage.getItem('alerted_delete_users')) localStorage.clear();
-                if (sessionStorage.getItem('alerted_delete_groups')) localStorage.removeItem('chat_mygroups');
+            if (sessionStorage.getItem('alerted_delete_users')) {
+                localStorage.clear();
                 showScreen('loginScreen');
                 return;
             }
 
-            // 3. 监听作者广播
             onValue(ref(db, 'system_broadcast'), (snap) => {
                 if(snap.exists()) {
                     const data = snap.val();
-                    
                     if(data.action === "delete_all_users" && !sessionStorage.getItem('alerted_delete_users')) {
-                        sessionStorage.setItem('alerted_delete_users', 'true'); // 锁死
+                        sessionStorage.setItem('alerted_delete_users', 'true'); 
                         alert("🚨 系统紧急通知：\n管理员已注销所有账号数据，请重新注册！");
                         localStorage.clear();
                         window.location.reload();
                     }
-                    
                     if(data.action === "delete_all_groups" && !sessionStorage.getItem('alerted_delete_groups')) {
-                        sessionStorage.setItem('alerted_delete_groups', 'true'); // 锁死
+                        sessionStorage.setItem('alerted_delete_groups', 'true'); 
                         alert("🚨 系统紧急通知：\n管理员已销毁所有群聊，你的群已被强制解散！");
                         localStorage.removeItem('chat_mygroups');
                         window.location.reload();
                     }
+                }
+            });
+        }
+
+        // 检测是否需要显示“一键登录”按钮
+        function setupOneClickLogin() {
+            const savedUser = localStorage.getItem('chat_username');
+            const btn = document.getElementById('oneClickLoginBtn');
+            if (savedUser) {
+                btn.style.display = 'block';
+                btn.innerText = `一键登录 (${savedUser})`;
+            } else {
+                btn.style.display = 'none';
+            }
+        }
+
+        // 一键登录核心逻辑
+        window.doOneClickLogin = function() {
+            const savedUser = localStorage.getItem('chat_username');
+            if (!savedUser) return;
+
+            get(ref(db, 'users/' + savedUser)).then((snapshot) => {
+                if (snapshot.exists()) {
+                    myName = savedUser;
+                    sessionStorage.removeItem('alerted_delete_users'); // 清除限制锁
+                    showScreen('lobbyScreen');
+                    renderLobby();
+                } else {
+                    alert("该账号已被注销，请重新输入密码注册！");
+                    localStorage.removeItem('chat_username');
+                    setupOneClickLogin();
                 }
             });
         }
@@ -111,7 +138,6 @@
                     if (snapshot.val().password === encryptedPass) {
                         myName = user;
                         localStorage.setItem('chat_username', myName); 
-                        // 登录成功，清除“防止弹窗”的死锁，以后作者再删号，广播依然生效
                         sessionStorage.removeItem('alerted_delete_users');
                         showScreen('lobbyScreen');
                         renderLobby();
@@ -120,7 +146,7 @@
                     if(confirm("检测到新账号，是否注册？")) {
                         set(ref(db, 'users/' + user), { password: encryptedPass }).then(() => {
                             myName = user;
-                            localStorage.setItem('chat_username', myName);
+                            localStorage.setItem('chat_username', myName); 
                             sessionStorage.removeItem('alerted_delete_users');
                             showScreen('lobbyScreen');
                             renderLobby();
@@ -134,7 +160,7 @@
             if(!confirm("⚠️ 警告：确定要注销当前账号吗？")) return;
             remove(ref(db, 'users/' + myName)).then(() => {
                 alert("账号已注销。");
-                localStorage.clear();
+                localStorage.clear(); 
                 window.location.reload();
             });
         }
@@ -433,7 +459,10 @@
             <h1 style="color:#07c160; margin-bottom:30px;">聊天室</h1>
             <input type="text" id="username" placeholder="输入账号" style="width:100%; max-width:300px; padding:15px; border:1px solid #ddd; border-radius:8px; margin-bottom:15px; outline:none;">
             <input type="password" id="password" placeholder="输入密码" style="width:100%; max-width:300px; padding:15px; border:1px solid #ddd; border-radius:8px; margin-bottom:15px; outline:none;">
-            <button onclick="loginOrRegister()" style="width:100%; max-width:300px; padding:15px; background:#07c160; color:white; border:none; border-radius:8px; font-weight:bold; font-size:16px;">登录 / 注册</button>
+            <button onclick="loginOrRegister()" style="width:100%; max-width:300px; padding:15px; background:#07c160; color:white; border:none; border-radius:8px; font-weight:bold; font-size:16px; margin-bottom: 15px;">登录 / 注册</button>
+            
+            <!-- 一键登录按钮（默认隐藏，检测到已注册过才显示） -->
+            <button id="oneClickLoginBtn" onclick="doOneClickLogin()" style="width:100%; max-width:300px; padding:15px; background:#f0f0f0; color:#07c160; border:1px solid #07c160; border-radius:8px; font-weight:bold; font-size:16px; display:none;">一键登录</button>
         </div>
     </div>
 
