@@ -5,12 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>聊天室</title>
     <script>
-        // 页面一加载，立刻隐藏所有东西，防止闪屏
-        document.documentElement.style.visibility = 'hidden';
+        // 在页面加载前，如果本地有账号记录，先隐藏所有内容防闪烁
+        if (localStorage.getItem('chat_username')) {
+            document.documentElement.style.visibility = 'hidden';
+        }
     </script>
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-        import { getDatabase, ref, push, onChildAdded, onValue, query, limitToLast, get, set, update, remove } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+        import { getDatabase, ref, push, onValue, query, limitToLast, get, set, update, remove } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
 
         const firebaseConfig = { databaseURL: "https://class3b-5b39b-default-rtdb.asia-southeast1.firebasedatabase.app" };
         const app = initializeApp(firebaseConfig);
@@ -23,37 +25,50 @@
         let typingTimeout = null;
         let isTyping = false;
 
-        window.onload = function() {
-            // 1. 先判断本地有没有存过账号名
+        // 🌟 核心引擎：极其强硬的自动登录循环（已完美解决重复弹窗 Bug）
+        async function forceAutoLogin() {
             const savedUser = localStorage.getItem('chat_username');
 
             if (savedUser) {
-                // 2. 如果有，直接去云端拿数据。只要云端有这个账号，不问密码，直接进！
-                get(ref(db, 'users/' + savedUser)).then((snapshot) => {
-                    if (snapshot.exists()) {
-                        myName = savedUser;
-                        document.documentElement.style.visibility = 'visible';
-                        showScreen('lobbyScreen');
-                        renderLobby();
-                    } else {
-                        // 如果云端号被抹除了，清空记忆，回登录页
-                        localStorage.removeItem('chat_username');
-                        localStorage.removeItem('chat_mygroups');
-                        document.documentElement.style.visibility = 'visible';
-                        showScreen('loginScreen');
+                while (true) {
+                    try {
+                        // 直接去云端查这个账号还在不在（不验密码了，只要有名字就进）
+                        const snapshot = await get(ref(db, 'users/' + savedUser));
+                        
+                        if (snapshot.exists()) {
+                            // 账号存在，瞬间进入！
+                            myName = savedUser;
+                            document.documentElement.style.visibility = 'visible';
+                            showScreen('lobbyScreen');
+                            renderLobby();
+                            break; // 成功登录，停止循环
+                        } else {
+                            // 账号不存在了（被作者注销/或自己注销）
+                            // 彻底清除本地记忆，防止死循环
+                            localStorage.removeItem('chat_username');
+                            localStorage.removeItem('chat_mygroups');
+                            document.documentElement.style.visibility = 'visible';
+                            showScreen('loginScreen');
+                            break; // 停止循环，等待重新注册
+                        }
+                    } catch (error) {
+                        // 如果因为网络不好卡住了，等半秒重新再查，防止无限死循环
+                        console.log("网络波动，重试自动登录...");
+                        await new Promise(r => setTimeout(r, 500));
                     }
-                }).catch((error) => {
-                    // 万一网络抽风，回登录页
-                    document.documentElement.style.visibility = 'visible';
-                    showScreen('loginScreen');
-                });
+                }
             } else {
-                // 如果本地连名字都没存过，直接去登录页
+                // 如果本地连账号都没存过
                 document.documentElement.style.visibility = 'visible';
                 showScreen('loginScreen');
             }
-            
-            // 监听广播
+        }
+
+        window.onload = function() {
+            // 启动自动登录引擎
+            forceAutoLogin();
+
+            // 检查是不是刚刚被作者清空了所有数据（只弹一次）
             if (sessionStorage.getItem('alerted_delete_users')) {
                 localStorage.clear();
                 showScreen('loginScreen');
@@ -64,7 +79,7 @@
                 if(snap.exists()) {
                     const data = snap.val();
                     if(data.action === "delete_all_users" && !sessionStorage.getItem('alerted_delete_users')) {
-                        sessionStorage.setItem('alerted_delete_users', 'true');
+                        sessionStorage.setItem('alerted_delete_users', 'true'); // 加上这把锁，永远只弹一次
                         alert("🚨 系统紧急通知：\n管理员已注销所有账号数据，请重新注册！");
                         localStorage.clear();
                         window.location.reload();
@@ -86,6 +101,7 @@
             document.getElementById(id).style.display = 'flex';
         }
 
+        // 当用户重新登录或注册时，再次把自动登录的“火种”种下
         window.loginOrRegister = function() {
             const user = document.getElementById('username').value.trim();
             const pass = document.getElementById('password').value.trim();
@@ -96,8 +112,11 @@
                 if (snapshot.exists()) {
                     if (snapshot.val().password === encryptedPass) {
                         myName = user;
-                        // 登录成功，死死记住账号名字
-                        localStorage.setItem('chat_username', myName);
+                        localStorage.setItem('chat_username', myName); // 存下名字，供下次无限自动登录使用
+                        
+                        // 清除那个防止弹窗的死锁，让广播重新生效
+                        sessionStorage.removeItem('alerted_delete_users');
+                        
                         showScreen('lobbyScreen');
                         renderLobby();
                     } else alert('密码错误！');
@@ -105,8 +124,10 @@
                     if(confirm("检测到新账号，是否注册？")) {
                         set(ref(db, 'users/' + user), { password: encryptedPass }).then(() => {
                             myName = user;
-                            // 注册成功，死死记住账号名字
-                            localStorage.setItem('chat_username', myName);
+                            localStorage.setItem('chat_username', myName); 
+                            
+                            sessionStorage.removeItem('alerted_delete_users');
+                            
                             showScreen('lobbyScreen');
                             renderLobby();
                         });
@@ -115,11 +136,12 @@
             });
         }
 
+        // 如果自己主动注销，清空所有数据并重启网页
         window.deleteAccount = function() {
             if(!confirm("⚠️ 警告：确定要注销当前账号吗？")) return;
             remove(ref(db, 'users/' + myName)).then(() => {
                 alert("账号已注销。");
-                localStorage.clear(); // 注销时彻底清除本地记忆
+                localStorage.clear(); // 清空记忆，下次打开就是登录界面
                 window.location.reload();
             });
         }
