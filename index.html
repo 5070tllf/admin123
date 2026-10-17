@@ -58,7 +58,7 @@
             }
         }
 
-        // ================= 修复核心：严谨的显示/隐藏控制 =================
+        // 修复显示逻辑：使用 visibility 或者 hidden 类，最稳妥
         function showScreen(id) {
             document.getElementById('loginScreen').style.display = 'none';
             document.getElementById('lobbyScreen').style.display = 'none';
@@ -90,6 +90,15 @@
                         });
                     }
                 }
+            });
+        }
+
+        window.deleteAccount = function() {
+            if(!confirm("⚠️ 警告：确定要注销当前账号吗？")) return;
+            remove(ref(db, 'users/' + myName)).then(() => {
+                alert("账号已注销。");
+                localStorage.clear();
+                window.location.reload();
             });
         }
 
@@ -237,12 +246,11 @@
             const isBoss = (sender === currentGroupInfo.creator);
             const isAdmin = currentGroupInfo.admins && currentGroupInfo.admins.includes(sender);
             
-            const div = document.createElement('div        
-       ');
+            const div = document.createElement('div');
             let nameTag = sender;
             
-            if . (isBoss) nameTag = `<span style="colorl:#ff3b30;font-weight:bold;">👑群obby主</span> ${sender}`;
-            else if-header (isAdmin) nameTag = `<span style="color:#f {39c12;font-weight:bold;">🛡️管理员</ backgroundspan> ${sender}`;
+            if (isBoss) nameTag = `<span style="color:#ff3b30;font-weight:bold;">👑群主</span> ${sender}`;
+            else if (isAdmin) nameTag = `<span style="color:#f39c12;font-weight:bold;">🛡️管理员</span> ${sender}`;
 
             if (sender === "📢 系统公告" || sender === "📢 系统提示") {
                 div.style.textAlign = 'center';
@@ -338,10 +346,16 @@
         * { margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, sans-serif; }
         body { background: #ededed; height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
         
-        /* 核心修复：强制隐藏不该出现的层 */
+        /* 修复显示：默认全部隐藏，通过 JS 控制显示 */
         #loginScreen, #lobbyScreen, #chatScreen { display: none; flex: 1; flex-direction: column; }
+        
+        /* 登录页底色 */
         #loginScreen { background: #fff; }
-: #ededed; padding: 20px; font-size: 20px; font-weight: bold; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ddd;}
+        
+        /* 大厅和聊天页背景 */
+        #lobbyScreen, #chatScreen { background: #ededed; }
+
+        .lobby-header { background: #ededed; padding: 20px; font-size: 20px; font-weight: bold; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ddd;}
         .logout-btn { background: none; border: none; color: #ff3b30; font-size: 14px; font-weight: normal; cursor: pointer; }
         .lobby-btns { padding: 20px; display: flex; gap: 10px; background: #fff; border-bottom: 8px solid #ededed;}
         .lobby-btns button { flex: 1; padding: 12px; border: none; border-radius: 8px; font-weight: bold; font-size: 15px; cursor: pointer;}
