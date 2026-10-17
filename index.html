@@ -34,6 +34,28 @@
         }
         myDeviceId = getDeviceId();
 
+        // 🌟 核心：实时双向监听设备封禁状态
+        function monitorDeviceBan() {
+            onValue(ref(db, 'banned_devices/' + myDeviceId), (snap) => {
+                if (snap.exists()) {
+                    // 瞬间封禁
+                    document.body.innerHTML = `
+                        <div style="height:100vh; display:flex; flex-direction:column; justify-content:center; align-items:center; background:#050505; padding:20px; text-align:center; z-index:99999; position:fixed; top:0; left:0; width:100%;">
+                            <h1 style="color:#ff3b30; font-size:32px; margin-bottom:20px;">🚫 设备已被永久封禁</h1>
+                            <p style="color:#aaa; font-size:16px;">管理员已永久禁止该设备访问本站。</p>
+                            <p style="color:#888; font-size:14px; margin-top:10px;">哪怕您更换账号或重新注册，也无法进入。</p>
+                        </div>
+                    `;
+                    localStorage.clear();
+                } else {
+                    // 瞬间解封（如果是被解封了，直接重载页面恢复正常登录）
+                    if (document.body.innerHTML.includes('设备已被永久封禁')) {
+                        window.location.reload();
+                    }
+                }
+            });
+        }
+
         async function checkAutoLogin() {
             try {
                 const devSnap = await get(ref(db, 'banned_devices/' + myDeviceId));
@@ -74,6 +96,8 @@
 
         window.onload = function() {
             checkAutoLogin();
+            monitorDeviceBan(); // 启动双向封禁雷达
+
             onValue(ref(db, 'system_broadcast'), (snap) => {
                 if(snap.exists()) {
                     const data = snap.val();
@@ -247,7 +271,6 @@
                 if (snap.exists()) return alert("🚫 你已被全网封杀，无法发言！");
                 get(ref(db, `groups/${currentGroupId}/muted/${myName}`)).then((muteSnap) => {
                     if (muteSnap.exists() && muteSnap.val() > Date.now()) {
-                        // 如果禁言时间超过了 9999 年，就显示为“永久禁言”
                         const remain = muteSnap.val() - Date.now();
                         if (remain > 315360000000) return alert(`🚫 你已被永久禁言！`);
                         const left = Math.ceil(remain / 60000);
@@ -322,21 +345,15 @@
             document.getElementById('actionModal').style.display = 'flex';
         }
 
-        // 🌟 科学记数法时间解析引擎
         window.parseTimeInput = function(input) {
             if (!input) return 0;
             input = input.trim().toLowerCase();
-            
-            // 如果包含 e+99，或者 e 且后面数字大于 30，说明是天文数字，直接返回 100 年（作为永久）
             if (input.includes('e+') || input.includes('e')) {
                 const numPart = parseFloat(input.replace(/[^0-9.e+]/g, ''));
-                if (isNaN(numPart)) return 3153600000000; // 默认 100 年
-                if (numPart > 1e+10) return 3153600000000; // 如果超过 100 亿，直接按永久算
+                if (isNaN(numPart) || numPart > 1e+10) return 3153600000000; 
             }
-
             let num = parseFloat(input);
             if (isNaN(num)) num = 0;
-            
             if (input.includes('m')) return num * 60 * 1000;
             if (input.includes('h')) return num * 60 * 60 * 1000;
             if (input.includes('d')) return num * 24 * 60 * 60 * 1000;
@@ -344,9 +361,8 @@
         }
 
         window.muteTarget = function() {
-            const timeStr = prompt(`禁言【${actionTargetName}】多久？\n支持格式：1m(分钟), 1h(小时), 1d(天)\n可输入无限大，例如: 1e+99d (相当于永久禁言)`);
+            const timeStr = prompt(`禁言【${actionTargetName}】多久？\n支持格式：1m, 1h, 1d\n可输入无限大，例如: 1e+99d (相当于永久禁言)`);
             if(!timeStr) return;
-            
             const ms = parseTimeInput(timeStr);
             if (ms === 0) return alert("时间格式错误！");
 
