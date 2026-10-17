@@ -20,7 +20,7 @@
         let isTyping = false;
 
         window.onload = function() {
-            // 检查是否已经被作者销毁过
+            // 广播监听
             if (sessionStorage.getItem('alerted_delete_users')) {
                 localStorage.removeItem('chat_username');
                 localStorage.removeItem('chat_mygroups');
@@ -31,7 +31,6 @@
                 localStorage.removeItem('chat_mygroups');
             }
 
-            // 监听作者的全网广播
             onValue(ref(db, 'system_broadcast'), (snap) => {
                 if(snap.exists()) {
                     const data = snap.val();
@@ -50,18 +49,33 @@
                 }
             });
 
-            // 🌟 核心：自动登录记忆功能
+            // 🌟 核心：免密自动登录逻辑
             const savedUser = localStorage.getItem('chat_username');
-            if (savedUser) {
+            const savedPass = localStorage.getItem('chat_password');
+
+            if (savedUser && savedPass) {
+                // 如果本地存了账号和密码，直接去云端验证
                 myName = savedUser;
-                showScreen('lobbyScreen');
-                renderLobby();
+                const encryptedPass = btoa(savedPass);
+                
+                get(ref(db, 'users/' + myName)).then((snapshot) => {
+                    if (snapshot.exists() && snapshot.val().password === encryptedPass) {
+                        // 验证通过，直接秒进大厅
+                        showScreen('lobbyScreen');
+                        renderLobby();
+                    } else {
+                        // 密码被改了或账号被删了，退回登录界面
+                        localStorage.removeItem('chat_username');
+                        localStorage.removeItem('chat_password');
+                        showScreen('loginScreen');
+                    }
+                });
             } else {
+                // 没存过密码，去登录界面
                 showScreen('loginScreen');
             }
         }
 
-        // 修复页面白屏错乱的核心逻辑
         function showScreen(id) {
             document.getElementById('loginScreen').style.display = 'none';
             document.getElementById('lobbyScreen').style.display = 'none';
@@ -79,7 +93,10 @@
                 if (snapshot.exists()) {
                     if (snapshot.val().password === encryptedPass) {
                         myName = user;
-                        localStorage.setItem('chat_username', myName); // 记住账号
+                        // 记住账号和密码
+                        localStorage.setItem('chat_username', myName);
+                        localStorage.setItem('chat_password', pass);
+                        
                         showScreen('lobbyScreen');
                         renderLobby();
                     } else alert('密码错误！');
@@ -87,7 +104,10 @@
                     if(confirm("检测到新账号，是否注册？")) {
                         set(ref(db, 'users/' + user), { password: encryptedPass }).then(() => {
                             myName = user;
-                            localStorage.setItem('chat_username', myName); // 记住账号
+                            // 记住账号和密码
+                            localStorage.setItem('chat_username', myName);
+                            localStorage.setItem('chat_password', pass);
+                            
                             showScreen('lobbyScreen');
                             renderLobby();
                         });
@@ -96,11 +116,12 @@
             });
         }
 
+        // 注销时清空所有记忆
         window.deleteAccount = function() {
             if(!confirm("⚠️ 警告：确定要注销当前账号吗？")) return;
             remove(ref(db, 'users/' + myName)).then(() => {
                 alert("账号已注销。");
-                localStorage.clear(); // 注销时才会清空记忆
+                localStorage.clear(); // 彻底清空账号、密码、群列表
                 window.location.reload();
             });
         }
@@ -349,7 +370,6 @@
         * { margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, sans-serif; }
         body { background: #ededed; height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
         
-        /* 核心：默认全部隐藏，靠 JS 唤醒 */
         #loginScreen, #lobbyScreen, #chatScreen { display: none; flex: 1; flex-direction: column; }
         #loginScreen { background: #fff; }
         #lobbyScreen, #chatScreen { background: #ededed; }
