@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>聊天室app</title>
+    <title>聊天室</title>
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
         import { getDatabase, ref, push, onChildAdded, onValue, query, limitToLast, get, set, update, remove } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
@@ -64,15 +64,46 @@
             });
         }
 
+        // 注销账号 + 群主转让逻辑
         window.deleteAccount = function() {
-            if(confirm("⚠️ 警告：确定要注销当前账号吗？\n你的账号密码将被永久抹除，无法找回！")) {
+            if(!confirm("⚠️ 警告：确定要注销当前账号吗？\n如果该账号是群主，群主身份将自动转让！")) return;
+
+            // 查找自己是不是群主
+            myGroups.forEach(gid => {
+                get(ref(db, `group_info/${gid}`)).then(snap => {
+                    if(snap.exists() && snap.val().creator === myName) {
+                        // 去找这个群里的所有消息记录，找有没有别人
+                        get(ref(db, `groups/${gid}/messages`)).then(msgSnap => {
+                            let newOwner = null;
+                            if(msgSnap.exists()) {
+                                msgSnap.forEach(msg => {
+                                    if(!newOwner && msg.val().sender !== myName && msg.val().sender !== "📢 系统管理员") {
+                                        newOwner = msg.val().sender;
+                                    }
+                                });
+                            }
+                            
+                            if(newOwner) {
+                                // 转让群主
+                                update(ref(db, `group_info/${gid}`), { creator: newOwner, admins: [newOwner] });
+                                push(ref(db, `groups/${gid}/messages`), { sender: "📢 系统管理员", text: `原群主注销，已自动将群主转让给 ${newOwner}`, time: Date.now() });
+                            } else {
+                                // 没人，把群删了
+                                remove(ref(db, `group_info/${gid}`));
+                                remove(ref(db, `groups/${gid}`));
+                            }
+                        });
+                    }
+                });
+            });
+
+            setTimeout(() => {
                 remove(ref(db, 'users/' + myName)).then(() => {
                     alert("账号已注销。");
-                    localStorage.removeItem('chat_username');
-                    localStorage.removeItem('chat_mygroups');
+                    localStorage.clear();
                     window.location.reload();
                 });
-            }
+            }, 1000);
         }
 
         function renderLobby() {
@@ -101,14 +132,12 @@
 
         window.createGroup = function() {
             const gName = prompt("第一步：请给新群聊起个名字：");
-            if(!gName || gName.trim() === "") {
-                return alert("取消创建：群名不能为空！");
-            }
+            if(!gName || gName.trim() === "") return alert("取消创建：群名不能为空！");
 
             const gid = Math.floor(1000 + Math.random() * 9000).toString();
 
             set(ref(db, 'group_info/' + gid), { creator: myName, name: gName.trim(), admins: [myName] }).then(() => {
-                alert(`🎉 建群成功！\n群名：${gName}\n群号：${gid}\n\n请把群号发给同学加入吧！`);
+                alert(`🎉 建群成功！\n群名：${gName}\n群号：${gid}`);
                 if(!myGroups.includes(gid)) myGroups.push(gid);
                 localStorage.setItem('chat_mygroups', JSON.stringify(myGroups));
                 enterChat(gid);
@@ -123,6 +152,8 @@
                     if(!myGroups.includes(gid)) myGroups.push(gid);
                     localStorage.setItem('chat_mygroups', JSON.stringify(myGroups));
                     enterChat(gid);
+                    // 发送加入群聊的系统提示
+                    push(ref(db, `groups/${gid}/messages`), { sender: "📢 系统提示", text: `${myName} 加入了群聊`, time: Date.now() });
                 } else alert("❌ 群号不存在！");
             });
         }
@@ -139,6 +170,7 @@
                 }
             });
 
+            // 核心修复：使用 onValue 监听整个消息表，让发送和接收100%同步！
             const messagesRef = query(ref(db, `groups/${gid}/messages`), limitToLast(50));
             onValue(messagesRef, (snapshot) => {
                 const box = document.getElementById('chatContent');
@@ -159,12 +191,8 @@
                     if (typingUsers.length > 0) {
                         typingEl.innerText = typingUsers.join(", ") + " 正在输入...";
                         typingEl.style.display = 'block';
-                    } else {
-                        typingEl.style.display = 'none';
-                    }
-                } else {
-                    typingEl.style.display = 'none';
-                }
+                    } else typingEl.style.display = 'none';
+                } else typingEl.style.display = 'none';
             });
         }
 
@@ -178,12 +206,10 @@
         window.handleTyping = function() {
             if (!currentGroupId) return;
             const typingRef = ref(db, `groups/${currentGroupId}/typing/${myName}`);
-            
             if (!isTyping) {
                 isTyping = true;
                 set(typingRef, myName);
             }
-
             clearTimeout(typingTimeout);
             typingTimeout = setTimeout(() => {
                 isTyping = false;
@@ -217,12 +243,19 @@
         function addMessageToUI(sender, text) {
             if (!text) return;
             const isMe = (sender === myName);
-            const isAdmin = sender === "📢 系统管理员";
+            const isAdmin = sender === "📢 系统管理员" || sender === "📢 系统提示";
             const div = document.createElement('div');
-            div.className = `msg ${isMe ? 'mine' : 'theirs'}`;
-            if(isAdmin) div.className = 'msg theirs admin-msg';
-
-            div.innerHTML = `<div class="msg-name">${!isMe ? sender : '我'}</div><div class="msg-text">${text}</div>`;
+            
+            if (isAdmin) {
+                // 系统提示样式（居中灰色）
+                div.style.textAlign = 'center';
+                div.style.margin = '10px 0';
+                div.innerHTML = `<span style="background: rgba(0,0,0,0.1); color: #888; font-size: 12px; padding: 4px 10px; border-radius: 10px;">${sender === "📢 系统管理员" ? text : text}</span>`;
+            } else {
+                div.className = `msg ${isMe ? 'mine' : 'theirs'}`;
+                div.innerHTML = `<div class="msg-name">${!isMe ? sender : '我'}</div><div class="msg-text">${text}</div>`;
+            }
+            
             const box = document.getElementById('chatContent');
             box.appendChild(div);
             setTimeout(() => { box.scrollTop = box.scrollHeight; }, 50);
@@ -231,12 +264,10 @@
         window.openGroupSettings = function() {
             document.getElementById('settingsModal').style.display = 'flex';
             document.getElementById('newGroupName').value = currentGroupInfo.name || "";
-            // 显示群ID
             document.getElementById('displayGroupId').innerText = currentGroupId;
         }
         window.closeSettings = function() { document.getElementById('settingsModal').style.display = 'none'; }
 
-        // 复制群号功能
         window.copyGroupId = function() {
             navigator.clipboard.writeText(currentGroupId).then(() => {
                 alert("群号 " + currentGroupId + " 已复制！");
@@ -307,7 +338,6 @@
         .msg-text { padding: 12px 16px; border-radius: 12px; font-size: 16px; line-height: 1.4; word-break: break-all;}
         .msg.mine .msg-text { background: #95ec69; color: #000; border-top-right-radius: 2px; }
         .msg.theirs .msg-text { background: #fff; color: #000; border-top-left-radius: 2px; }
-        .admin-msg .msg-text { background: #ff3b30; color: white; font-weight: bold;}
         
         .input-area { padding: 15px; background: #f7f7f7; border-top: 1px solid #ddd; display: flex; gap: 10px; padding-bottom: calc(15px + env(safe-area-inset-bottom)); }
         .input-area input { flex: 1; padding: 12px; border-radius: 8px; border: none; background: #fff; outline: none; }
@@ -372,19 +402,14 @@
     <div id="settingsModal">
         <div class="modal-box">
             <h3>群聊设置</h3>
-            
-            <!-- 新增：显示群号并复制 -->
             <div style="background: #f0f0f0; padding: 10px; border-radius: 8px; margin-bottom: 15px; text-align: center; font-size: 14px;">
                 群号：<strong id="displayGroupId" style="color: #007aff; font-size: 18px;"></strong>
                 <button onclick="copyGroupId()" style="width: auto; padding: 5px 10px; margin: 5px auto 0; display: block; background: #007aff; color: white; font-size: 12px;">一键复制</button>
             </div>
-
             <input type="text" id="newGroupName" placeholder="修改群名称">
             <button onclick="changeGroupName()" style="background: #007aff; color: white;">保存群名</button>
-            
             <input type="text" id="newAdminName" placeholder="输入账号设置管理员">
             <button onclick="addAdmin()" style="background: #f39c12; color: white;">设为管理员</button>
-            
             <button onclick="closeSettings()" style="background: #eee; color: #333; margin-top: 5px;">取消</button>
         </div>
     </div>
