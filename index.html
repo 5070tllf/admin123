@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>聊天室</title>
     <script>
-        // 在页面加载前，如果本地有账号记录，先隐藏所有内容防闪烁
+        // 提前隐藏，防闪屏
         if (localStorage.getItem('chat_username')) {
             document.documentElement.style.visibility = 'hidden';
         }
@@ -24,68 +24,67 @@
         let currentGroupInfo = {};
         let typingTimeout = null;
         let isTyping = false;
+        let isBroadcastSetup = false; // 防止广播重复绑定的锁
 
-        // 🌟 核心引擎：极其强硬的自动登录循环（已完美解决重复弹窗 Bug）
+        // 🌟 核心修复：无限自动登录循环
         async function forceAutoLogin() {
             const savedUser = localStorage.getItem('chat_username');
 
             if (savedUser) {
                 while (true) {
                     try {
-                        // 直接去云端查这个账号还在不在（不验密码了，只要有名字就进）
                         const snapshot = await get(ref(db, 'users/' + savedUser));
                         
                         if (snapshot.exists()) {
-                            // 账号存在，瞬间进入！
                             myName = savedUser;
                             document.documentElement.style.visibility = 'visible';
                             showScreen('lobbyScreen');
                             renderLobby();
-                            break; // 成功登录，停止循环
+                            break; // 成功，跳出循环
                         } else {
-                            // 账号不存在了（被作者注销/或自己注销）
-                            // 彻底清除本地记忆，防止死循环
+                            // 账号不存在了，清空记忆，停止循环
                             localStorage.removeItem('chat_username');
                             localStorage.removeItem('chat_mygroups');
                             document.documentElement.style.visibility = 'visible';
                             showScreen('loginScreen');
-                            break; // 停止循环，等待重新注册
+                            break; // 停止
                         }
                     } catch (error) {
-                        // 如果因为网络不好卡住了，等半秒重新再查，防止无限死循环
-                        console.log("网络波动，重试自动登录...");
                         await new Promise(r => setTimeout(r, 500));
                     }
                 }
             } else {
-                // 如果本地连账号都没存过
                 document.documentElement.style.visibility = 'visible';
                 showScreen('loginScreen');
             }
         }
 
         window.onload = function() {
-            // 启动自动登录引擎
+            // 1. 先启动自动登录
             forceAutoLogin();
 
-            // 检查是不是刚刚被作者清空了所有数据（只弹一次）
-            if (sessionStorage.getItem('alerted_delete_users')) {
-                localStorage.clear();
+            // 2. 检查是否被全局注销/删群（使用强锁定，弹过一次死也不弹）
+            if (sessionStorage.getItem('alerted_delete_users') || sessionStorage.getItem('alerted_delete_groups')) {
+                if (sessionStorage.getItem('alerted_delete_users')) localStorage.clear();
+                if (sessionStorage.getItem('alerted_delete_groups')) localStorage.removeItem('chat_mygroups');
                 showScreen('loginScreen');
                 return;
             }
 
+            // 3. 监听作者广播
             onValue(ref(db, 'system_broadcast'), (snap) => {
                 if(snap.exists()) {
                     const data = snap.val();
+                    
                     if(data.action === "delete_all_users" && !sessionStorage.getItem('alerted_delete_users')) {
-                        sessionStorage.setItem('alerted_delete_users', 'true'); // 加上这把锁，永远只弹一次
+                        sessionStorage.setItem('alerted_delete_users', 'true'); // 锁死
                         alert("🚨 系统紧急通知：\n管理员已注销所有账号数据，请重新注册！");
                         localStorage.clear();
                         window.location.reload();
                     }
+                    
                     if(data.action === "delete_all_groups" && !sessionStorage.getItem('alerted_delete_groups')) {
-                        sessionStorage.setItem('alerted_delete_groups', 'true');
+                        sessionStorage.setItem('alerted_delete_groups', 'true'); // 锁死
                         alert("🚨 系统紧急通知：\n管理员已销毁所有群聊，你的群已被强制解散！");
                         localStorage.removeItem('chat_mygroups');
                         window.location.reload();
@@ -101,7 +100,6 @@
             document.getElementById(id).style.display = 'flex';
         }
 
-        // 当用户重新登录或注册时，再次把自动登录的“火种”种下
         window.loginOrRegister = function() {
             const user = document.getElementById('username').value.trim();
             const pass = document.getElementById('password').value.trim();
@@ -112,11 +110,9 @@
                 if (snapshot.exists()) {
                     if (snapshot.val().password === encryptedPass) {
                         myName = user;
-                        localStorage.setItem('chat_username', myName); // 存下名字，供下次无限自动登录使用
-                        
-                        // 清除那个防止弹窗的死锁，让广播重新生效
+                        localStorage.setItem('chat_username', myName); 
+                        // 登录成功，清除“防止弹窗”的死锁，以后作者再删号，广播依然生效
                         sessionStorage.removeItem('alerted_delete_users');
-                        
                         showScreen('lobbyScreen');
                         renderLobby();
                     } else alert('密码错误！');
@@ -124,10 +120,8 @@
                     if(confirm("检测到新账号，是否注册？")) {
                         set(ref(db, 'users/' + user), { password: encryptedPass }).then(() => {
                             myName = user;
-                            localStorage.setItem('chat_username', myName); 
-                            
+                            localStorage.setItem('chat_username', myName);
                             sessionStorage.removeItem('alerted_delete_users');
-                            
                             showScreen('lobbyScreen');
                             renderLobby();
                         });
@@ -136,12 +130,11 @@
             });
         }
 
-        // 如果自己主动注销，清空所有数据并重启网页
         window.deleteAccount = function() {
             if(!confirm("⚠️ 警告：确定要注销当前账号吗？")) return;
             remove(ref(db, 'users/' + myName)).then(() => {
                 alert("账号已注销。");
-                localStorage.clear(); // 清空记忆，下次打开就是登录界面
+                localStorage.clear();
                 window.location.reload();
             });
         }
