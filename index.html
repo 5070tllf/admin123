@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <titl>聊天室</title>
+    <title>聊天室</title>
     <script>
         if (localStorage.getItem('chat_username')) {
             document.documentElement.style.visibility = 'hidden';
@@ -118,11 +118,13 @@
             });
         }
 
+        // ================= 修复：严格页面切换 =================
         function showScreen(id) {
             document.getElementById('loginScreen').style.display = 'none';
             document.getElementById('lobbyScreen').style.display = 'none';
             document.getElementById('chatScreen').style.display = 'none';
-            document.getElementById(id).style.display = 'flex';
+            
+            document.getElementById(id).style.display = 'flex'; // 强制 flex
         }
 
         window.loginOrRegister = function() {
@@ -316,7 +318,6 @@
         }
         window.closeSettings = function() { document.getElementById('settingsModal').style.display = 'none'; }
 
-        // 加载成员列表（包含设管/撤管/踢人）
         function loadMemberList() {
             const memberListEl = document.getElementById('memberList');
             memberListEl.innerHTML = '<div style="text-align:center; color:#888; padding:10px;">正在扫描...</div>';
@@ -339,20 +340,15 @@
                     const isMemberAdmin = (currentGroupInfo.admins && currentGroupInfo.admins.includes(member));
                     let tag = isMemberBoss ? "👑 群主" : (isMemberAdmin ? "🛡️ 管理员" : "");
 
-                    // 群主专属权限操作
                     let actionBtn = "";
                     if (iAmOwner && !isMemberBoss && member !== myName) {
                         if (isMemberAdmin) {
-                            // 新增：撤销管理员按钮
-                            actionBtn = `<button onclick="removeAdmin('${member}')" style="padding:5px 10px; background:#f39c12; color:#fff; border:none; border-radius:6px padding; font-bottom-size:12px; margin-right:5:px;">撤管</button>`;
+                            actionBtn = `<button onclick="removeAdmin('${member}')" style="padding:5px 10px; background:#f39c12; color:#fff; border:none; border-radius:6px; font-size:12px; margin-right:5px;">撤管</button>`;
                         } else {
- calc                            // 设为管理员按钮
                             actionBtn = `<button onclick="addAdminByName('${member}')" style="padding:5px 10px; background:#007aff; color:#fff; border:none; border-radius:6px; font-size:12px; margin-right:5px;">设管</button>`;
                         }
-                        // 踢出按钮
                         actionBtn += `<button onclick="kickUser('${member}')" style="padding:5px 10px; background:#ffebeb; color:#ff3b30; border:1px solid #ffcccc; border-radius:6px; font-size:12px;">踢出</button>`;
                     } 
-                    // 管理员可以踢普通成员
                     else if (!iAmOwner && currentGroupInfo.admins.includes(myName) && !isMemberBoss && !isMemberAdmin && member !== myName) {
                         actionBtn = `<button onclick="kickUser('${member}')" style="padding:5px 10px; background:#ffebeb; color:#ff3b30; border:1px solid #ffcccc; border-radius:6px; font-size:12px;">踢出</button>`;
                     }
@@ -368,24 +364,18 @@
             });
         }
 
-        // 快捷设为管理员
         window.addAdminByName = function(name) {
             if (myName !== currentGroupInfo.creator) return;
             const newAdmins = [...currentGroupInfo.admins, name];
             update(ref(db, 'group_info/' + currentGroupId), { admins: newAdmins }).then(() => { 
-                alert(name + " 已被设为管理员！"); 
                 loadMemberList();
             });
         }
 
-        // 新增：撤销管理员权限
         window.removeAdmin = function(name) {
             if (myName !== currentGroupInfo.creator) return;
-            if(!confirm(`确定要撤销【${name}】的管理员权限吗？`)) return;
-            
             const newAdmins = currentGroupInfo.admins.filter(admin => admin !== name);
             update(ref(db, 'group_info/' + currentGroupId), { admins: newAdmins }).then(() => { 
-                alert(name + " 已被撤销管理员！"); 
                 loadMemberList();
             });
         }
@@ -404,31 +394,41 @@
         }
     </script>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, sans-serif; }
+        /* ================= 终极设备 UI 适配 ================= */
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, sans-serif; -webkit-tap-highlight-color: transparent;}
+        
+        /* 使用 dvh 彻底解决手机端键盘弹起导致的挤压 */
         body { background: #ededed; height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
         
-        #loginScreen, #lobbyScreen, #chatScreen { display: none; flex: 1; flex-direction: column; min-height: 0; }
-        #loginScreen { background: #fff; justify-content: center; align-items: center;}
+        /* 页面基础状态 */
+        #loginScreen, #lobbyScreen, #chatScreen { display: none; flex: 1; flex-direction: column; height: 100%; overflow: hidden; }
         
-        .lobby-header { background: #ededed; padding: 20px; font-size: 20px; font-weight: bold; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ddd;}
+        /* 登录页居中 */
+        #loginScreen { background: #fff; justify-content: center; align-items: center; }
+
+        /* ================= 大厅 ================= */
+        .lobby-header { background: #ededed; padding: 20px; font-size: 20px; font-weight: bold; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ddd; flex-shrink: 0;}
         .logout-btn { background: none; border: none; color: #ff3b30; font-size: 14px; cursor: pointer; }
-        .lobby-btns { padding: 20px; display: flex; gap: 10px; background: #fff; border-bottom: 8px solid #ededed;}
+        .lobby-btns { padding: 20px; display: flex; gap: 10px; background: #fff; border-bottom: 8px solid #ededed; flex-shrink: 0;}
         .lobby-btns button { flex: 1; padding: 12px; border: none; border-radius: 8px; font-weight: bold; font-size: 15px; cursor: pointer; background: #007aff; color: white;}
-        .btn-join-box { display: flex; gap: 10px; padding: 20px; background: #fff;}
+        .btn-join-box { display: flex; gap: 10px; padding: 20px; background: #fff; flex-shrink: 0;}
         .btn-join-box input { flex: 1; padding: 12px; border: 1px solid #ddd; border-radius: 8px; outline: none;}
         .btn-join-box button { padding: 0 20px; background: #07c160; color: white; border: none; border-radius: 8px; font-weight: bold;}
-        
-        .group-list { flex: 1; overflow-y: auto; background: #fff;}
+        .group-list { flex: 1; overflow-y: auto; background: #fff; -webkit-overflow-scrolling: touch;}
         .chat-item { display: flex; align-items: center; padding: 15px; border-bottom: 1px solid #f0f0f0; cursor: pointer; }
         .avatar { width: 50px; height: 50px; border-radius: 8px; background: #07c160; display: flex; justify-content: center; align-items: center; font-size: 24px; margin-right: 15px; }
         .info .name { font-size: 17px; font-weight: 500; }
-        
+
+        /* ================= 聊天页 ================= */
         .header { background: #ededed; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ddd; flex-shrink: 0;}
         .header-left { display: flex; align-items: center; gap: 10px; }
         .header h1 { font-size: 18px; color: #000; margin: 0;}
         .leave-btn { background: none; border: none; color: #007aff; font-size: 16px; cursor: pointer; }
         .settings-btn { background: none; border: none; font-size: 20px; cursor: pointer; }
+        
+        /* 核心修复：聊天内容区自动填满剩余空间并顺滑滚动 */
         .chat-content { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 15px; -webkit-overflow-scrolling: touch; }
+        
         .msg { display: flex; flex-direction: column; max-width: 80%; }
         .msg.mine { align-self: flex-end; align-items: flex-end; }
         .msg.theirs { align-self: flex-start; align-items: flex-start; }
@@ -450,19 +450,22 @@
             100% { box-shadow: 0 0 10px rgba(255, 59, 48, 0.6); }
         }
 
+        /* 核心修复：输入框死死钉在底部，加上安全区边距 */
         .input-area { 
             padding: 15px; background: #f7f7f7; border-top: 1px solid #ddd; 
             display: flex; gap: 10px; flex-shrink: 0; 
-           (15px + env(safe-area-inset-bottom)); 
+            padding-bottom: calc(15px + env(safe-area-inset-bottom)); 
         }
-        .input-area input { flex: 1; padding: 12px; border-radius: 8px; border: none; background: #fff; outline: none; }
-        .input-area button { padding: 0 25px; border-radius: 8px; background: #07c160; color: white; border: none; font-weight: bold; }
+        .input-area input { flex: 1; padding: 12px; border-radius: 8px; border: none; background: #fff; outline: none; font-size:16px;}
+        .input-area button { padding: 0 25px; border-radius: 8px; background: #07c160; color: white; border: none; font-weight: bold; font-size:16px;}
+        
         #typingIndicator { display: none; font-size: 12px; color: #07c160; padding: 5px 20px; background: #f7f7f7; font-style: italic; flex-shrink: 0;}
         
+        /* 设置弹窗 */
         #settingsModal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); display: none; justify-content: center; align-items: center; z-index: 999; }
         .modal-box { background: #fff; width: 85%; max-width: 320px; padding: 20px; border-radius: 12px; max-height: 80vh; overflow-y: auto;}
         .modal-box h3 { margin-bottom: 15px; text-align: center; }
-        .modal-box input { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 15px; outline: none;}
+        .modal-box input { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 15px; outline: none; font-size:16px;}
         .modal-box button { width: 100%; padding: 12px; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; margin-bottom: 10px; }
         
         .member-list { margin-top: 10px; border-top: 1px solid #eee; padding-top: 10px; }
@@ -470,14 +473,12 @@
 </head>
 <body>
     <div id="loginScreen">
-        <div style="flex:1; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:30px; width:100%;">
-            <h1 style="color:#07c160; margin-bottom:30px;">聊天室</h1>
-            <input type="text" id="username" placeholder="输入账号" style="width:100%; max-width:300px; padding:15px; border:1px solid #ddd; border-radius:8px; margin-bottom:15px; outline:none;">
-            <input type="password" id="password" placeholder="输入密码" style="width:100%; max-width:300px; padding:15px; border:1px solid #ddd; border-radius:8px; margin-bottom:15px; outline:none;">
-            <button onclick="loginOrRegister()" style="width:100%; max-width:300px; padding:15px; background:#07c160; color:white; border:none; border-radius:8px; font-weight:bold; font-size:16px; margin-bottom: 15px;">登录 / 注册</button>
-            
-            <button id="oneClickLoginBtn" onclick="doOneClickLogin()" style="width:100%; max-width:300px; padding:15px; background:#f0f0f0; color:#07c160; border:1px solid #07c160; border-radius:8px; font-weight:bold; font-size:16px; display:none;">一键登录</button>
-        </div>
+        <h1 style="color:#07c160; margin-bottom:30px;">聊天室</h1>
+        <input type="text" id="username" placeholder="输入账号" style="width:100%; max-width:300px; padding:15px; border:1px solid #ddd; border-radius:8px; margin-bottom:15px; outline:none; font-size:16px;">
+        <input type="password" id="password" placeholder="输入密码" style="width:100%; max-width:300px; padding:15px; border:1px solid #ddd; border-radius:8px; margin-bottom:15px; outline:none; font-size:16px;">
+        <button onclick="loginOrRegister()" style="width:100%; max-width:300px; padding:15px; background:#07c160; color:white; border:none; border-radius:8px; font-weight:bold; font-size:16px; margin-bottom: 15px;">登录 / 注册</button>
+        
+        <button id="oneClickLoginBtn" onclick="doOneClickLogin()" style="width:100%; max-width:300px; padding:15px; background:#f0f0f0; color:#07c160; border:1px solid #07c160; border-radius:8px; font-weight:bold; font-size:16px; display:none;">一键登录</button>
     </div>
 
     <div id="lobbyScreen">
