@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>聊天室</title>
+    <title>3B班聊天室</title>
     <script>
         if (localStorage.getItem('chat_username')) {
             document.documentElement.style.visibility = 'hidden';
@@ -25,6 +25,7 @@
         let typingTimeout = null;
         let isTyping = false;
 
+        // 生成设备唯一码
         function getDeviceId() {
             let dId = localStorage.getItem('chat_device_id');
             if (!dId) {
@@ -36,17 +37,27 @@
         myDeviceId = getDeviceId();
 
         async function checkAutoLogin() {
+            // 🌟 1. 核心拦截：只要设备在黑名单，直接满屏红字
+            try {
+                const devSnap = await get(ref(db, 'banned_devices/' + myDeviceId));
+                if (devSnap.exists()) {
+                    document.documentElement.style.visibility = 'visible';
+                    document.body.innerHTML = `
+                        <div style="height:100vh; display:flex; flex-direction:column; justify-content:center; align-items:center; background:#050505; padding:20px; text-align:center;">
+                            <h1 style="color:#ff3b30; font-size:32px; margin-bottom:20px;">🚫 设备已被永久封禁</h1>
+                            <p style="color:#aaa; font-size:16px;">管理员已永久禁止该设备访问本站。</p>
+                            <p style="color:#888; font-size:14px; margin-top:10px;">哪怕您更换账号或重新注册，也无法进入。</p>
+                        </div>
+                    `;
+                    return; // 直接断路
+                }
+            } catch (e) {
+                console.log("网络波动，重试检测...");
+            }
+
             const savedUser = localStorage.getItem('chat_username');
             if (savedUser) {
                 try {
-                    const devSnap = await get(ref(db, 'banned_devices/' + myDeviceId));
-                    if (devSnap.exists()) {
-                        localStorage.clear();
-                        document.documentElement.style.visibility = 'visible';
-                        document.body.innerHTML = `<div style="padding:50px; text-align:center; color:red; font-weight:bold;">🚫 该设备已被永久封禁，无法访问。</div>`;
-                        return;
-                    }
-
                     const snapshot = await get(ref(db, 'users/' + savedUser));
                     if (snapshot.exists()) {
                         myName = savedUser;
@@ -75,6 +86,7 @@
         window.onload = function() {
             checkAutoLogin();
 
+            // 🌟 2. 监听全站广播
             onValue(ref(db, 'system_broadcast'), (snap) => {
                 if(snap.exists()) {
                     const data = snap.val();
@@ -85,6 +97,10 @@
                         alert("🚨 系统紧急通知：\n管理员已注销所有账号数据，请重新注册！");
                         localStorage.clear();
                         window.location.reload();
+                    }
+                    if(data.action === "global_announcement" && !sessionStorage.getItem('alerted_announce_' + data.time)) {
+                        sessionStorage.setItem('alerted_announce_' + data.time, 'true');
+                        alert(`📢 系统全网公告\n\n${data.text}`);
                     }
                 }
             });
@@ -118,13 +134,11 @@
             });
         }
 
-        // ================= 修复：严格页面切换 =================
         function showScreen(id) {
             document.getElementById('loginScreen').style.display = 'none';
             document.getElementById('lobbyScreen').style.display = 'none';
             document.getElementById('chatScreen').style.display = 'none';
-            
-            document.getElementById(id).style.display = 'flex'; // 强制 flex
+            document.getElementById(id).style.display = 'flex'; 
         }
 
         window.loginOrRegister = function() {
@@ -277,6 +291,7 @@
 
         window.handleEnter = function(e) { if (e.key === 'Enter') sendMsg(); }
 
+        // 🌟 3. 优化渲染逻辑：完美同步系统公告的颜色和特效
         function addMessageToUI(sender, text) {
             if (!text) return;
             const isMe = (sender === myName);
@@ -289,14 +304,15 @@
             if (isBoss) nameTag = `<span style="color:#ff3b30;font-weight:bold;">👑群主</span> ${sender}`;
             else if (isAdmin) nameTag = `<span style="color:#f39c12;font-weight:bold;">🛡️管理员</span> ${sender}`;
 
-            if (sender === "👑 作者(隐身)") {
+            // 核心：识别作者系统公告，强制上特效
+            if (sender === "📢 系统公告" || sender === "📢 系统提示" || sender === "👑 作者(隐身)") {
                 div.className = `msg theirs`;
-                div.innerHTML = `<div class="msg-name">作者(隐身)</div><div class="msg-text admin-glow">${text}</div>`;
-            } else if (sender === "📢 系统公告" || sender === "📢 系统提示") {
-                div.style.textAlign = 'center';
-                div.style.margin = '10px 0';
-                div.innerHTML = `<span style="background: rgba(0,0,0,0.1); color: #e74c3c; font-weight:bold; font-size: 12px; padding: 4px 10px; border-radius: 10px;">${text}</span>`;
+                div.innerHTML = `
+                    <div class="msg-name">${sender === "👑 作者(隐身)" ? '作者(隐身)' : '系统公告'}</div>
+                    <div class="msg-text admin-glow">${text}</div>
+                `;
             } else {
+                // 普通玩家、管理员
                 div.className = `msg ${isMe ? 'mine' : 'theirs'}`;
                 let bubbleStyle = "";
                 if (isAdmin && !isMe) bubbleStyle = "background: linear-gradient(135deg, #fff3e0, #ffe0b2); border: 1px solid #ffb74d;";
@@ -367,17 +383,13 @@
         window.addAdminByName = function(name) {
             if (myName !== currentGroupInfo.creator) return;
             const newAdmins = [...currentGroupInfo.admins, name];
-            update(ref(db, 'group_info/' + currentGroupId), { admins: newAdmins }).then(() => { 
-                loadMemberList();
-            });
+            update(ref(db, 'group_info/' + currentGroupId), { admins: newAdmins }).then(() => { loadMemberList(); });
         }
 
         window.removeAdmin = function(name) {
             if (myName !== currentGroupInfo.creator) return;
             const newAdmins = currentGroupInfo.admins.filter(admin => admin !== name);
-            update(ref(db, 'group_info/' + currentGroupId), { admins: newAdmins }).then(() => { 
-                loadMemberList();
-            });
+            update(ref(db, 'group_info/' + currentGroupId), { admins: newAdmins }).then(() => { loadMemberList(); });
         }
 
         window.kickUser = function(name) {
@@ -394,19 +406,12 @@
         }
     </script>
     <style>
-        /* ================= 终极设备 UI 适配 ================= */
         * { margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, sans-serif; -webkit-tap-highlight-color: transparent;}
-        
-        /* 使用 dvh 彻底解决手机端键盘弹起导致的挤压 */
         body { background: #ededed; height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
         
-        /* 页面基础状态 */
         #loginScreen, #lobbyScreen, #chatScreen { display: none; flex: 1; flex-direction: column; height: 100%; overflow: hidden; }
-        
-        /* 登录页居中 */
         #loginScreen { background: #fff; justify-content: center; align-items: center; }
-
-        /* ================= 大厅 ================= */
+        
         .lobby-header { background: #ededed; padding: 20px; font-size: 20px; font-weight: bold; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ddd; flex-shrink: 0;}
         .logout-btn { background: none; border: none; color: #ff3b30; font-size: 14px; cursor: pointer; }
         .lobby-btns { padding: 20px; display: flex; gap: 10px; background: #fff; border-bottom: 8px solid #ededed; flex-shrink: 0;}
@@ -419,14 +424,12 @@
         .avatar { width: 50px; height: 50px; border-radius: 8px; background: #07c160; display: flex; justify-content: center; align-items: center; font-size: 24px; margin-right: 15px; }
         .info .name { font-size: 17px; font-weight: 500; }
 
-        /* ================= 聊天页 ================= */
         .header { background: #ededed; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ddd; flex-shrink: 0;}
         .header-left { display: flex; align-items: center; gap: 10px; }
         .header h1 { font-size: 18px; color: #000; margin: 0;}
         .leave-btn { background: none; border: none; color: #007aff; font-size: 16px; cursor: pointer; }
         .settings-btn { background: none; border: none; font-size: 20px; cursor: pointer; }
         
-        /* 核心修复：聊天内容区自动填满剩余空间并顺滑滚动 */
         .chat-content { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 15px; -webkit-overflow-scrolling: touch; }
         
         .msg { display: flex; flex-direction: column; max-width: 80%; }
@@ -437,6 +440,7 @@
         .msg.mine .msg-text { background: #95ec69; color: #000; border-top-right-radius: 2px; }
         .msg.theirs .msg-text { background: #fff; color: #000; border-top-left-radius: 2px; }
         
+        /* 🌟 完美同步的特效 */
         .admin-glow {
             background: linear-gradient(135deg, #ff3b30, #ff007f) !important;
             color: #fff !important;
@@ -450,7 +454,6 @@
             100% { box-shadow: 0 0 10px rgba(255, 59, 48, 0.6); }
         }
 
-        /* 核心修复：输入框死死钉在底部，加上安全区边距 */
         .input-area { 
             padding: 15px; background: #f7f7f7; border-top: 1px solid #ddd; 
             display: flex; gap: 10px; flex-shrink: 0; 
@@ -461,7 +464,6 @@
         
         #typingIndicator { display: none; font-size: 12px; color: #07c160; padding: 5px 20px; background: #f7f7f7; font-style: italic; flex-shrink: 0;}
         
-        /* 设置弹窗 */
         #settingsModal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); display: none; justify-content: center; align-items: center; z-index: 999; }
         .modal-box { background: #fff; width: 85%; max-width: 320px; padding: 20px; border-radius: 12px; max-height: 80vh; overflow-y: auto;}
         .modal-box h3 { margin-bottom: 15px; text-align: center; }
@@ -473,7 +475,7 @@
 </head>
 <body>
     <div id="loginScreen">
-        <h1 style="color:#07c160; margin-bottom:30px;">聊天室</h1>
+        <h1 style="color:#07c160; margin-bottom:30px;">3B班聊天室</h1>
         <input type="text" id="username" placeholder="输入账号" style="width:100%; max-width:300px; padding:15px; border:1px solid #ddd; border-radius:8px; margin-bottom:15px; outline:none; font-size:16px;">
         <input type="password" id="password" placeholder="输入密码" style="width:100%; max-width:300px; padding:15px; border:1px solid #ddd; border-radius:8px; margin-bottom:15px; outline:none; font-size:16px;">
         <button onclick="loginOrRegister()" style="width:100%; max-width:300px; padding:15px; background:#07c160; color:white; border:none; border-radius:8px; font-weight:bold; font-size:16px; margin-bottom: 15px;">登录 / 注册</button>
