@@ -1,399 +1,1485 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>聊天室</title>
-    <script>
-        if (localStorage.getItem('chat_username')) { document.documentElement.style.visibility = 'hidden'; }
-    </script>
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-        import { getDatabase, ref, push, onValue, query, limitToLast, get, set, update, remove } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>极光聊天 · 玩家端</title>
+  <script>
+    // 提前判断缓存，避免闪屏（仅在有缓存时隐藏，登录检查后恢复）
+    if (localStorage.getItem('chat_username')) {
+      document.documentElement.style.visibility = 'hidden';
+    }
+  </script>
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+    import {
+      getDatabase, ref, push, onValue, query, limitToLast,
+      get, set, update, remove, child
+    } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
 
-        const firebaseConfig = { databaseURL: "https://class3b-5b39b-default-rtdb.asia-southeast1.firebasedatabase.app" };
-        const app = initializeApp(firebaseConfig);
-        const db = getDatabase(app);
+    /* ==================== 配置 ==================== */
+    const firebaseConfig = {
+      databaseURL: "https://class3b-5b39b-default-rtdb.asia-southeast1.firebasedatabase.app"
+    };
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
 
-        let myName = ""; let myDeviceId = ""; let currentGroupId = "";
-        let myGroups = JSON.parse(localStorage.getItem('chat_mygroups') || "[]"); 
-        let currentGroupInfo = {}; let actionTargetName = ""; 
+    /* ==================== 全局状态 ==================== */
+    let myName = "";
+    let myDeviceId = "";
+    let currentGroupId = "";
+    let myGroups = JSON.parse(localStorage.getItem('chat_mygroups') || "[]");
+    let currentGroupInfo = {};
+    let actionTargetName = "";
+    let isAuthor = false; // 当前登录用户是否为作者
+    let banListenerBound = false;
 
-        function getDeviceId() { let dId = localStorage.getItem('chat_device_id'); if (!dId) { dId = 'DEV-' + Math.random().toString(36).substr(2, 9).toUpperCase(); localStorage.setItem('chat_device_id', dId); } return dId; }
-        myDeviceId = getDeviceId();
+    /* ==================== 设备码 ==================== */
+    function getDeviceId() {
+      let dId = localStorage.getItem('chat_device_id');
+      if (!dId) {
+        dId = 'DEV-' + Math.random().toString(36).substr(2, 9).toUpperCase();
+        localStorage.setItem('chat_device_id', dId);
+      }
+      return dId;
+    }
+    myDeviceId = getDeviceId();
 
-        // 封禁拦截与解封
-        function monitorDeviceBan() {
-            onValue(ref(db, 'banned_devices/' + myDeviceId), (snap) => {
-                if (snap.exists()) {
-                    const currentName = localStorage.getItem('chat_username');
-                    if (currentName) sessionStorage.setItem('ghost_username', currentName);
-                    document.body.innerHTML = `<div id="ban-screen" style="height:100vh; display:flex; flex-direction:column; justify-content:center; align-items:center; background:#000; padding:20px; text-align:center; z-index:99999; position:fixed; top:0; left:0; width:100%;"><h1 style="color:#ff3b30; font-size:32px; font-weight:800; text-shadow: 0 0 20px rgba(255,59,48,0.5);">🚫 数据异常，已强行下线</h1></div>`;
-                    localStorage.removeItem('chat_username');
-                } else {
-                    if (document.getElementById('ban-screen')) {
-                        const ghostName = sessionStorage.getItem('ghost_username');
-                        if (ghostName) { localStorage.setItem('chat_username', ghostName); sessionStorage.removeItem('ghost_username'); window.location.reload(); } else { window.location.reload(); }
-                    }
-                }
-            });
-        }
+    /* ==================== 工具：时间解析 ==================== */
+    // 支持 1m / 1h / 1d / 1e+99d（无限）
+    function parseTimeInput(input) {
+      if (!input) return 0;
+      input = String(input).trim().toLowerCase();
 
-        async function checkAutoLogin() {
-            try { const devSnap = await get(ref(db, 'banned_devices/' + myDeviceId)); if (devSnap.exists()) { document.documentElement.style.visibility = 'visible'; document.body.innerHTML = `<div id="ban-screen" style="height:100vh; display:flex; flex-direction:column; justify-content:center; align-items:center; background:#000; padding:20px; text-align:center;"><h1 style="color:#ff3b30; font-size:32px; font-weight:800;">🚫 数据异常，已强行下线</h1></div>`; return; } } catch (e) {}
+      // 无限禁言（指数形式）
+      if (input.includes('e+') || input.includes('e')) {
+        const numPart = parseFloat(input.replace(/[^0-9.e+]/g, ''));
+        if (isNaN(numPart)) return 0;
+        // 极大值视为永久（约100年）
+        if (numPart > 1e+10) return 3153600000000;
+        // 正常指数按 d 处理
+        return numPart * 24 * 60 * 60 * 1000;
+      }
 
-            const savedUser = localStorage.getItem('chat_username');
-            if (savedUser) {
-                try {
-                    const snapshot = await get(ref(db, 'users/' + savedUser));
-                    if (snapshot.exists()) { myName = savedUser; document.documentElement.style.visibility = 'visible'; showScreen('lobbyScreen'); renderLobby(); } 
-                    else { localStorage.removeItem('chat_username'); localStorage.removeItem('chat_mygroups'); document.documentElement.style.visibility = 'visible'; showScreen('loginScreen'); setupOneClickLogin(); }
-                } catch (error) { document.documentElement.style.visibility = 'visible'; showScreen('loginScreen'); setupOneClickLogin(); }
-            } else { document.documentElement.style.visibility = 'visible'; showScreen('loginScreen'); setupOneClickLogin(); }
-        }
+      let num = parseFloat(input);
+      if (isNaN(num)) return 0;
 
-        window.onload = function() {
-            checkAutoLogin(); monitorDeviceBan(); 
-            onValue(ref(db, 'system_broadcast'), (snap) => {
-                if(snap.exists()) {
-                    const data = snap.val(); if (Date.now() - data.time > 10000) return;
-                    if(data.action === "delete_all_users" && !sessionStorage.getItem('alerted_delete_users')) { sessionStorage.setItem('alerted_delete_users', 'true'); alert("🚨 系统紧急通知：\n管理员已注销所有账号数据，请重新注册！"); localStorage.clear(); myDeviceId = getDeviceId(); window.location.reload(); }
-                    if(data.action === "global_announcement" && !sessionStorage.getItem('alerted_announce_' + data.time)) { sessionStorage.setItem('alerted_announce_' + data.time, 'true'); alert(`📢 系统全网公告\n\n${data.text}`); }
-                }
-            });
-        }
+      if (input.includes('m')) return num * 60 * 1000;
+      if (input.includes('h')) return num * 60 * 60 * 1000;
+      if (input.includes('d')) return num * 24 * 60 * 60 * 1000;
 
-        function setupOneClickLogin() { const savedUser = localStorage.getItem('chat_username'); const btn = document.getElementById('oneClickLoginBtn'); if (savedUser) { btn.style.display = 'block'; btn.innerText = `一键登录 (${savedUser})`; } else { btn.style.display = 'none'; } }
-        window.doOneClickLogin = function() { const savedUser = localStorage.getItem('chat_username'); if (!savedUser) return; get(ref(db, 'users/' + savedUser)).then((snapshot) => { if (snapshot.exists()) { myName = savedUser; sessionStorage.removeItem('alerted_delete_users'); showScreen('lobbyScreen'); renderLobby(); } else { alert("该账号已被注销！"); localStorage.removeItem('chat_username'); setupOneClickLogin(); } }); }
-        function showScreen(id) { document.getElementById('loginScreen').style.display = 'none'; document.getElementById('lobbyScreen').style.display = 'none'; document.getElementById('chatScreen').style.display = 'none'; document.getElementById(id).style.display = 'flex'; }
+      // 默认分钟
+      return num * 60 * 1000;
+    }
 
-        window.loginOrRegister = function() {
-            const user = document.getElementById('username').value.trim(); const pass = document.getElementById('password').value.trim(); if (!user || !pass) return alert('账号和密码不能为空！');
-            get(ref(db, 'banned_devices/' + myDeviceId)).then(devSnap => {
-                if(devSnap.exists()) return alert("🚫 你的设备已被永久封禁！");
-                const encryptedPass = btoa(pass);
-                get(ref(db, 'users/' + user)).then((snapshot) => {
-                    if (snapshot.exists()) { if (snapshot.val().password === encryptedPass) { myName = user; localStorage.setItem('chat_username', myName); update(ref(db, 'users/' + user), { deviceId: myDeviceId }); sessionStorage.removeItem('alerted_delete_users'); showScreen('lobbyScreen'); renderLobby(); } else alert('密码错误！'); } 
-                    else {
-                        if(confirm("检测到新账号，是否注册？")) {
-                            get(ref(db, 'users/' + user)).then((checkSnap) => {
-                                if (checkSnap.exists()) { alert("❌ 该用户名已被抢注，请换一个！"); } 
-                                else { set(ref(db, 'users/' + user), { password: encryptedPass, deviceId: myDeviceId }).then(() => { myName = user; localStorage.setItem('chat_username', myName); sessionStorage.removeItem('alerted_delete_users'); showScreen('lobbyScreen'); renderLobby(); }); }
-                            });
-                        }
-                    }
-                });
-            });
-        }
+    function formatRemain(ms) {
+      if (ms > 315360000000) return "永久";
+      const m = Math.ceil(ms / 60000);
+      if (m >= 1440) return Math.ceil(m / 1440) + " 天";
+      if (m >= 60) return Math.ceil(m / 60) + " 小时";
+      return m + " 分钟";
+    }
 
-        window.deleteAccount = function() { if(!confirm("⚠️ 警告：确定要注销当前账号吗？")) return; remove(ref(db, 'users/' + myName)).then(() => { alert("账号已注销。"); localStorage.clear(); myDeviceId = getDeviceId(); window.location.reload(); }); }
+    /* ==================== 设备封禁监听 ==================== */
+    // 黑屏渲染
+    function showBanScreen() {
+      document.body.innerHTML = `
+        <div id="ban-screen" style="position:fixed;top:0;left:0;width:100%;height:100%;background:#000;display:flex;justify-content:center;align-items:center;z-index:99999;flex-direction:column;padding:20px;text-align:center;">
+          <h1 style="color:#ff3b30;font-size:32px;font-weight:800;text-shadow:0 0 30px rgba(255,59,48,0.6);">🚫 数据异常，已强行下线</h1>
+          <p style="color:rgba(255,255,255,0.5);margin-top:20px;font-size:14px;">该设备已被永久封禁</p>
+        </div>`;
+    }
 
-        // 大厅：自动拉取群主强制把你拉进去的群
-        function renderLobby() {
-            document.getElementById('myNameDisplay').innerText = myName;
-            const listEl = document.getElementById('myGroupList');
-            
-            onValue(ref(db, 'group_info'), (snapshot) => {
-                let localGroupsSet = new Set(myGroups);
-                
-                if (snapshot.exists()) {
-                    const allGroups = snapshot.val();
-                    for (let gid in allGroups) {
-                        if (allGroups[gid].members && allGroups[gid].members.includes(myName)) {
-                            localGroupsSet.add(gid);
-                        }
-                    }
-                }
+    // 绑定设备封禁监听（只绑定一次）
+    function bindDeviceBanMonitor() {
+      if (banListenerBound) return;
+      banListenerBound = true;
 
-                myGroups = Array.from(localGroupsSet);
-                localStorage.setItem('chat_mygroups', JSON.stringify(myGroups));
-
-                listEl.innerHTML = '';
-                if(myGroups.length === 0) { listEl.innerHTML = '<div style="text-align:center; color:rgba(255,255,255,0.5); margin-top:50px; font-size:14px;">你还没有加入任何群聊</div>'; return; }
-
-                myGroups.forEach(gid => {
-                    get(ref(db, `group_info/${gid}`)).then(snap => {
-                        if(snap.exists()) {
-                            const gName = snap.val().name || ("群聊 " + gid);
-                            const div = document.createElement('div'); div.className = 'chat-item';
-                            div.innerHTML = `<div class="avatar">👥</div><div class="info"><div class="name">${gName}</div></div>`;
-                            div.onclick = () => enterChat(gid); listEl.appendChild(div);
-                        }
-                    });
-                });
-            });
-        }
-
-        window.createGroup = function() {
-            const gName = prompt("第一步：请给新群聊起个名字："); if(!gName || gName.trim() === "") return alert("取消创建：群名不能为空！"); const gid = Math.floor(1000 + Math.random() * 9000).toString();
-            set(ref(db, 'group_info/' + gid), { creator: myName, name: gName.trim(), admins: [myName], members: [myName] }).then(() => {
-                alert(`🎉 建群成功！\n群名：${gName}\n群号：${gid}`); if(!myGroups.includes(gid)) myGroups.push(gid); localStorage.setItem('chat_mygroups', JSON.stringify(myGroups)); enterChat(gid);
-            });
-        }
-
-        window.joinGroup = function() {
-            const gid = document.getElementById('joinGroupId').value.trim(); if (!gid) return;
-            get(ref(db, 'group_info/' + gid)).then((snap) => {
-                if (snap.exists()) {
-                    if(!myGroups.includes(gid)) myGroups.push(gid); localStorage.setItem('chat_mygroups', JSON.stringify(myGroups));
-                    const members = snap.val().members || []; if(!members.includes(myName)) { members.push(myName); update(ref(db, `group_info/${gid}`), { members: members }); }
-                    enterChat(gid); push(ref(db, `groups/${gid}/messages`), { sender: "📢 系统提示", text: `${myName} 加入了群聊`, time: Date.now() });
-                } else alert("❌ 群号不存在！");
-            });
-        }
-
-        window.leaveGroup = function() { if(!confirm("确定要退出该群聊吗？")) return; myGroups = myGroups.filter(id => id !== currentGroupId); localStorage.setItem('chat_mygroups', JSON.stringify(myGroups)); goLobby(); }
-
-        function enterChat(gid) {
-            currentGroupId = gid; showScreen('chatScreen'); document.getElementById('chatContent').innerHTML = '';
-            onValue(ref(db, 'group_info/' + gid), (snap) => { if(snap.exists()) { currentGroupInfo = snap.val(); document.getElementById('displayGroupName').innerText = currentGroupInfo.name || ("群 " + gid); } else { if(currentGroupId === gid) { if(myGroups.includes(gid)) { myGroups = myGroups.filter(id => id !== gid); localStorage.setItem('chat_mygroups', JSON.stringify(myGroups)); alert("该群已被强制销毁！"); } goLobby(); } } });
-            const messagesRef = query(ref(db, `groups/${gid}/messages`), limitToLast(50)); onValue(messagesRef, (snapshot) => { const box = document.getElementById('chatContent'); box.innerHTML = ''; if (snapshot.exists()) { snapshot.forEach((childSnapshot) => { addMessageToUI(childSnapshot.val().sender, childSnapshot.val().text); }); } });
-        }
-
-        window.goLobby = function() { currentGroupId = ""; showScreen('lobbyScreen'); renderLobby(); }
-
-        window.sendMsg = function() {
-            const input = document.getElementById('msgInput'); const text = input.value.trim(); if (!text) return;
-            get(ref(db, 'banned/' + myName)).then((snap) => { if (snap.exists()) return alert("🚫 你已被全网封杀，无法发言！"); get(ref(db, `groups/${currentGroupId}/muted/${myName}`)).then((muteSnap) => { if (muteSnap.exists() && muteSnap.val() > Date.now()) { const remain = muteSnap.val() - Date.now(); if (remain > 315360000000) return alert(`🚫 你已被永久禁言！`); const left = Math.ceil(remain / 60000); return alert(`🚫 你已被禁言，还剩 ${left} 分钟！`); } push(ref(db, `groups/${currentGroupId}/messages`), { sender: myName, text: text, time: Date.now() }); input.value = ''; }); });
-        }
-        window.handleEnter = function(e) { if (e.key === 'Enter') sendMsg(); }
-
-        function addMessageToUI(sender, text) {
-            if (!text) return; const isMe = (sender === myName); const isBoss = (sender === currentGroupInfo.creator); const isAdmin = currentGroupInfo.admins && currentGroupInfo.admins.includes(sender);
-            const div = document.createElement('div'); let nameTag = sender;
-            if (isBoss) nameTag = `<span style="color:#ff3b30;font-weight:bold;text-shadow:0 0 10px rgba(255,59,48,0.5);">👑群主</span> ${sender}`; else if (isAdmin) nameTag = `<span style="color:#f39c12;font-weight:bold;text-shadow:0 0 10px rgba(243,156,18,0.5);">🛡️管理员</span> ${sender}`;
-            if (sender === "📢 系统公告" || sender === "📢 系统提示" || sender === "👑 作者(隐身)") { div.className = `msg theirs`; div.innerHTML = `<div class="msg-name" style="text-align:center;">${sender === "👑 作者(隐身)" ? '作者(隐身)' : '系统公告'}</div><div class="msg-text admin-glow">${text}</div>`; } 
-            else {
-                div.className = `msg ${isMe ? 'mine' : 'theirs'}`; let bubbleStyle = ""; if (isAdmin && !isMe) bubbleStyle = "background: linear-gradient(135deg, rgba(243,156,18,0.2), rgba(255,183,77,0.3)); border: 1px solid rgba(243,156,18,0.5); color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,0.5); box-shadow: 0 4px 15px rgba(243,156,18,0.2);";
-                const iAmOwner = (myName === currentGroupInfo.creator); const iAmAdmin = (currentGroupInfo.admins && currentGroupInfo.admins.includes(myName)); const canManage = (iAmOwner || iAmAdmin) && !isMe && !isBoss;
-                if (canManage) { div.style.cursor = "pointer"; div.onclick = () => showActionModal(sender); }
-                div.innerHTML = `<div class="msg-name">${!isMe ? nameTag : '我'}</div><div class="msg-text" style="${bubbleStyle}">${text}</div>`;
+      onValue(ref(db, 'banned_devices/' + myDeviceId), (snap) => {
+        if (snap.exists()) {
+          // 保存当前账号用于解封后恢复
+          const currentName = localStorage.getItem('chat_username');
+          if (currentName) sessionStorage.setItem('ghost_username', currentName);
+          showBanScreen();
+        } else {
+          // 解封：如果之前是因为封禁被踢下，恢复免密登录
+          if (document.getElementById('ban-screen')) {
+            const ghostName = sessionStorage.getItem('ghost_username');
+            if (ghostName) {
+              sessionStorage.removeItem('ghost_username');
+              // 恢复缓存并刷新，自动免密登录
+              localStorage.setItem('chat_username', ghostName);
+              window.location.reload();
+            } else {
+              // 原本就没登录，正常回到登录页
+              window.location.reload();
             }
-            const box = document.getElementById('chatContent'); box.appendChild(div); setTimeout(() => { box.scrollTop = box.scrollHeight; }, 50);
+          }
+        }
+      });
+    }
+
+    /* ==================== 自动登录 ==================== */
+    async function checkAutoLogin() {
+      try {
+        // 先检查设备封禁（防穿透）
+        const devSnap = await get(ref(db, 'banned_devices/' + myDeviceId));
+        if (devSnap.exists()) {
+          document.documentElement.style.visibility = 'visible';
+          showBanScreen();
+          return;
+        }
+      } catch (e) {
+        console.warn('封禁检查失败', e);
+      }
+
+      const savedUser = localStorage.getItem('chat_username');
+      if (savedUser) {
+        try {
+          const snapshot = await get(ref(db, 'users/' + savedUser));
+          if (snapshot.exists()) {
+            myName = savedUser;
+            isAuthor = !!snapshot.val().isAuthor;
+            // 登录成功，绑定设备码（确保绑定）
+            update(ref(db, 'users/' + savedUser), { deviceId: myDeviceId }).catch(() => {});
+            document.documentElement.style.visibility = 'visible';
+            showScreen('lobbyScreen');
+            renderLobby();
+            return;
+          } else {
+            localStorage.removeItem('chat_username');
+            localStorage.removeItem('chat_mygroups');
+          }
+        } catch (e) {
+          console.warn(e);
+        }
+      }
+      document.documentElement.style.visibility = 'visible';
+      showScreen('loginScreen');
+      setupOneClickLogin();
+    }
+
+    /* ==================== 页面初始化 ==================== */
+    window.onload = function () {
+      checkAutoLogin();
+      bindDeviceBanMonitor();
+
+      // 系统广播监听
+      onValue(ref(db, 'system_broadcast'), (snap) => {
+        if (snap.exists()) {
+          const data = snap.val();
+          if (Date.now() - (data.time || 0) > 10000) return;
+
+          if (data.action === "delete_all_users" && !sessionStorage.getItem('alerted_delete_users')) {
+            sessionStorage.setItem('alerted_delete_users', 'true');
+            alert("🚨 系统紧急通知：\n管理员已注销所有账号数据，请重新注册！");
+            localStorage.clear();
+            myDeviceId = getDeviceId();
+            window.location.reload();
+          }
+
+          if (data.action === "global_announcement" && !sessionStorage.getItem('alerted_announce_' + data.time)) {
+            sessionStorage.setItem('alerted_announce_' + data.time, 'true');
+            alert(`📢 系统全网公告\n\n${data.text}`);
+          }
+        }
+      });
+    };
+
+    /* ==================== 登录/注册 ==================== */
+    function setupOneClickLogin() {
+      const savedUser = localStorage.getItem('chat_username');
+      const btn = document.getElementById('oneClickLoginBtn');
+      if (savedUser && btn) {
+        btn.style.display = 'block';
+        btn.innerText = `一键登录 (${savedUser})`;
+      } else if (btn) {
+        btn.style.display = 'none';
+      }
+    }
+
+    window.doOneClickLogin = function () {
+      const savedUser = localStorage.getItem('chat_username');
+      if (!savedUser) return;
+      get(ref(db, 'users/' + savedUser)).then((snapshot) => {
+        if (snapshot.exists()) {
+          myName = savedUser;
+          isAuthor = !!snapshot.val().isAuthor;
+          sessionStorage.removeItem('alerted_delete_users');
+          showScreen('lobbyScreen');
+          renderLobby();
+        } else {
+          alert("该账号已被注销！");
+          localStorage.removeItem('chat_username');
+          setupOneClickLogin();
+        }
+      });
+    };
+
+    function showScreen(id) {
+      document.getElementById('loginScreen').style.display = 'none';
+      document.getElementById('lobbyScreen').style.display = 'none';
+      document.getElementById('chatScreen').style.display = 'none';
+      document.getElementById(id).style.display = 'flex';
+    }
+
+    window.loginOrRegister = function () {
+      const user = document.getElementById('username').value.trim();
+      const pass = document.getElementById('password').value.trim();
+      if (!user || !pass) return alert('账号和密码不能为空！');
+      if (user.length < 2) return alert('账号至少2个字符');
+      if (pass.length < 4) return alert('密码至少4位');
+
+      get(ref(db, 'banned_devices/' + myDeviceId)).then(devSnap => {
+        if (devSnap.exists()) return alert("🚫 你的设备已被永久封禁！");
+
+        const encryptedPass = btoa(pass);
+
+        get(ref(db, 'users/' + user)).then((snapshot) => {
+          if (snapshot.exists()) {
+            // 已有账号：校验密码
+            if (snapshot.val().password === encryptedPass) {
+              myName = user;
+              isAuthor = !!snapshot.val().isAuthor;
+              localStorage.setItem('chat_username', myName);
+              update(ref(db, 'users/' + user), { deviceId: myDeviceId });
+              sessionStorage.removeItem('alerted_delete_users');
+              showScreen('lobbyScreen');
+              renderLobby();
+            } else {
+              alert('密码错误！');
+            }
+          } else {
+            // 新账号：强制查重（这里因唯一主键天然唯一，二次确认注册）
+            if (confirm(`账号 "${user}" 不存在，是否注册新账号？`)) {
+              // 再次检查，防止并发抢注
+              get(ref(db, 'users/' + user)).then((checkSnap) => {
+                if (checkSnap.exists()) {
+                  alert("❌ 该用户名已被抢注，请换一个！");
+                } else {
+                  set(ref(db, 'users/' + user), {
+                    password: encryptedPass,
+                    deviceId: myDeviceId,
+                    isAuthor: false
+                  }).then(() => {
+                    myName = user;
+                    isAuthor = false;
+                    localStorage.setItem('chat_username', myName);
+                    sessionStorage.removeItem('alerted_delete_users');
+                    showScreen('lobbyScreen');
+                    renderLobby();
+                  });
+                }
+              });
+            }
+          }
+        });
+      });
+    };
+
+    window.deleteAccount = function () {
+      if (!confirm("⚠️ 警告：确定要注销当前账号吗？")) return;
+      remove(ref(db, 'users/' + myName)).then(() => {
+        alert("账号已注销。");
+        localStorage.clear();
+        myDeviceId = getDeviceId();
+        window.location.reload();
+      });
+    };
+
+    /* ==================== 大厅 ==================== */
+    let lobbyListenerBound = false;
+    function renderLobby() {
+      document.getElementById('myNameDisplay').innerText = myName + (isAuthor ? ' 👑' : '');
+
+      if (lobbyListenerBound) return;
+      lobbyListenerBound = true;
+
+      onValue(ref(db, 'group_info'), (snapshot) => {
+        let localGroupsSet = new Set(myGroups);
+        if (snapshot.exists()) {
+          const allGroups = snapshot.val();
+          for (let gid in allGroups) {
+            const g = allGroups[gid];
+            if (g.members && g.members.includes(myName)) {
+              localGroupsSet.add(gid);
+            }
+          }
+        }
+        myGroups = Array.from(localGroupsSet);
+        localStorage.setItem('chat_mygroups', JSON.stringify(myGroups));
+
+        const listEl = document.getElementById('myGroupList');
+        listEl.innerHTML = '';
+
+        if (myGroups.length === 0) {
+          listEl.innerHTML = '<div style="text-align:center;color:rgba(255,255,255,0.5);margin-top:50px;font-size:14px;">你还没有加入任何群聊</div>';
+          return;
         }
 
-        window.showActionModal = function(targetName) {
-            actionTargetName = targetName; const isTargetAdmin = currentGroupInfo.admins.includes(targetName);
-            document.getElementById('btnSetAdmin').innerText = isTargetAdmin ? '撤销管理员' : '设为管理员'; document.getElementById('btnSetAdmin').onclick = isTargetAdmin ? removeAdminTarget : addAdminTarget;
-            get(ref(db, `groups/${currentGroupId}/muted/${targetName}`)).then(muteSnap => { const btnMute = document.getElementById('btnMute'); if (muteSnap.exists() && muteSnap.val() > Date.now()) { btnMute.innerText = '解除禁言'; btnMute.style.background = 'rgba(52,199,89,0.2)'; btnMute.style.color = '#34c759'; btnMute.onclick = unmuteTarget; } else { btnMute.innerText = '禁言该用户'; btnMute.style.background = 'rgba(255,149,0,0.2)'; btnMute.style.color = '#ff9500'; btnMute.onclick = muteTarget; } });
-            document.getElementById('modalTargetName').innerText = targetName; document.getElementById('actionModal').style.display = 'flex';
+        myGroups.forEach(gid => {
+          get(ref(db, `group_info/${gid}`)).then(snap => {
+            if (snap.exists()) {
+              const gName = snap.val().name || ("群聊 " + gid);
+              const div = document.createElement('div');
+              div.className = 'chat-item';
+              div.innerHTML = `<div class="avatar">👥</div><div class="info"><div class="name">${gName}</div></div>`;
+              div.onclick = () => enterChat(gid);
+              listEl.appendChild(div);
+            }
+          });
+        });
+      });
+    }
+
+    window.createGroup = function () {
+      const gName = prompt("请给新群聊起个名字：");
+      if (!gName || gName.trim() === "") return alert("取消创建：群名不能为空！");
+      const gid = Math.floor(1000 + Math.random() * 9000).toString();
+
+      set(ref(db, 'group_info/' + gid), {
+        creator: myName,
+        name: gName.trim(),
+        admins: [myName],
+        members: [myName]
+      }).then(() => {
+        alert(`🎉 建群成功！\n群名：${gName}\n群号：${gid}`);
+        if (!myGroups.includes(gid)) myGroups.push(gid);
+        localStorage.setItem('chat_mygroups', JSON.stringify(myGroups));
+        enterChat(gid);
+      });
+    };
+
+    window.joinGroup = function () {
+      const gid = document.getElementById('joinGroupId').value.trim();
+      if (!gid) return;
+
+      get(ref(db, 'group_info/' + gid)).then((snap) => {
+        if (snap.exists()) {
+          const info = snap.val();
+          if (!myGroups.includes(gid)) myGroups.push(gid);
+          localStorage.setItem('chat_mygroups', JSON.stringify(myGroups));
+
+          const members = info.members || [];
+          if (!members.includes(myName)) {
+            members.push(myName);
+            update(ref(db, `group_info/${gid}`), { members });
+          }
+          enterChat(gid);
+          push(ref(db, `groups/${gid}/messages`), {
+            sender: "📢 系统提示",
+            text: `${myName} 加入了群聊`,
+            time: Date.now()
+          });
+        } else {
+          alert("❌ 群号不存在！");
+        }
+      });
+    };
+
+    window.leaveGroup = function () {
+      if (!confirm("确定要退出该群聊吗？")) return;
+      myGroups = myGroups.filter(id => id !== currentGroupId);
+      localStorage.setItem('chat_mygroups', JSON.stringify(myGroups));
+      goLobby();
+    };
+
+    /* ==================== 聊天 ==================== */
+    let chatInfoListener = null;
+    let chatMsgListener = null;
+
+    function enterChat(gid) {
+      currentGroupId = gid;
+      showScreen('chatScreen');
+      document.getElementById('chatContent').innerHTML = '';
+
+      // 解绑旧监听
+      if (chatInfoListener) { chatInfoListener(); chatInfoListener = null; }
+      if (chatMsgListener) { chatMsgListener(); chatMsgListener = null; }
+
+      // 群信息监听
+      const unsubInfo = onValue(ref(db, 'group_info/' + gid), (snap) => {
+        if (snap.exists()) {
+          currentGroupInfo = snap.val();
+          document.getElementById('displayGroupName').innerText = currentGroupInfo.name || ("群 " + gid);
+        } else {
+          // 群被销毁
+          if (currentGroupId === gid) {
+            if (myGroups.includes(gid)) {
+              myGroups = myGroups.filter(id => id !== gid);
+              localStorage.setItem('chat_mygroups', JSON.stringify(myGroups));
+              alert("该群已被强制销毁！");
+            }
+            goLobby();
+          }
+        }
+      });
+      chatInfoListener = unsubInfo;
+
+      // 消息监听
+      const messagesRef = query(ref(db, `groups/${gid}/messages`), limitToLast(50));
+      const unsubMsg = onValue(messagesRef, (snapshot) => {
+        const box = document.getElementById('chatContent');
+        box.innerHTML = '';
+        if (snapshot.exists()) {
+          snapshot.forEach((childSnapshot) => {
+            const msg = childSnapshot.val();
+            addMessageToUI(msg.sender, msg.text, msg.isAuthorMsg);
+          });
+        }
+      });
+      chatMsgListener = unsubMsg;
+    }
+
+    window.goLobby = function () {
+      if (chatInfoListener) { chatInfoListener(); chatInfoListener = null; }
+      if (chatMsgListener) { chatMsgListener(); chatMsgListener = null; }
+      currentGroupId = "";
+      showScreen('lobbyScreen');
+      renderLobby();
+    };
+
+    window.sendMsg = function () {
+      const input = document.getElementById('msgInput');
+      const text = input.value.trim();
+      if (!text) return;
+
+      // 检查全网封杀
+      get(ref(db, 'banned/' + myName)).then((snap) => {
+        if (snap.exists()) return alert("🚫 你已被全网封杀，无法发言！");
+
+        // 检查本群禁言
+        get(ref(db, `groups/${currentGroupId}/muted/${myName}`)).then((muteSnap) => {
+          if (muteSnap.exists()) {
+            const until = muteSnap.val();
+            if (until > Date.now()) {
+              const remain = until - Date.now();
+              return alert(`🚫 你已被禁言，剩余 ${formatRemain(remain)}！`);
+            } else {
+              // 禁言已过期，自动清除
+              remove(ref(db, `groups/${currentGroupId}/muted/${myName}`)).catch(() => {});
+            }
+          }
+
+          // 发送消息（作者带 isAuthorMsg 标记）
+          push(ref(db, `groups/${currentGroupId}/messages`), {
+            sender: myName,
+            text: text,
+            time: Date.now(),
+            isAuthorMsg: isAuthor
+          });
+          input.value = '';
+        });
+      });
+    };
+
+    window.handleEnter = function (e) {
+      if (e.key === 'Enter') sendMsg();
+    };
+
+    function addMessageToUI(sender, text, isAuthorMsg) {
+      if (!text) return;
+
+      const isMe = (sender === myName);
+      const isBoss = (sender === currentGroupInfo.creator);
+      const isAdmin = currentGroupInfo.admins && currentGroupInfo.admins.includes(sender);
+      // 作者消息判断：优先 isAuthorMsg，或名字匹配
+      const isFromAuthor = !!isAuthorMsg;
+
+      const div = document.createElement('div');
+
+      let nameTag = sender;
+      if (isBoss) {
+        nameTag = `<span style="color:#ff3b30;font-weight:bold;text-shadow:0 0 10px rgba(255,59,48,0.5);">👑群主</span> ${sender}`;
+      } else if (isAdmin) {
+        nameTag = `<span style="color:#f39c12;font-weight:bold;text-shadow:0 0 10px rgba(243,156,18,0.5);">🛡️管理员</span> ${sender}`;
+      } else if (isFromAuthor) {
+        nameTag = `<span style="color:#ff0080;font-weight:bold;text-shadow:0 0 10px rgba(255,0,128,0.8);">作者</span> ${sender}`;
+      }
+
+      // 系统/作者公告
+      if (sender === "📢 系统公告" || sender === "📢 系统提示" || sender === "👑 作者(隐身)") {
+        div.className = `msg theirs`;
+        const isAuthorGhost = (sender === "👑 作者(隐身)");
+        div.innerHTML = `
+          <div class="msg-name" style="text-align:center;">${isAuthorGhost ? '作者(隐身)' : '系统公告'}</div>
+          <div class="msg-text ${isAuthorGhost ? 'author-glow' : 'admin-glow'}">${text}</div>`;
+      } else {
+        div.className = `msg ${isMe ? 'mine' : 'theirs'}`;
+
+        let bubbleStyle = "";
+        let bubbleClass = "";
+
+        if (isFromAuthor) {
+          bubbleClass = "author-glow";
+        } else if (isAdmin && !isMe) {
+          bubbleStyle = "background: linear-gradient(135deg, rgba(243,156,18,0.2), rgba(255,183,77,0.3)); border: 1px solid rgba(243,156,18,0.5); color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,0.5); box-shadow: 0 4px 15px rgba(243,156,18,0.2);";
         }
 
-        window.openGroupSettings = function() { document.getElementById('settingsModal').style.display = 'flex'; document.getElementById('displayGroupId').innerText = currentGroupId; loadMemberList(); }
-        window.closeSettings = function() { document.getElementById('settingsModal').style.display = 'none'; }
+        // 权限判断：可点击管理
+        const iAmOwner = (myName === currentGroupInfo.creator);
+        const iAmAdmin = (currentGroupInfo.admins && currentGroupInfo.admins.includes(myName));
+        const canManage = (iAmOwner || iAmAdmin) && !isMe && !isBoss && !isFromAuthor;
 
-        function loadMemberList() {
-            const memberListEl = document.getElementById('memberList'); memberListEl.innerHTML = '<div style="text-align:center; color:rgba(255,255,255,0.5); padding:10px;">正在扫描成员...</div>';
-            const membersSet = new Set(); if (currentGroupInfo.members) { currentGroupInfo.members.forEach(m => membersSet.add(m)); } membersSet.add(currentGroupInfo.creator); membersSet.add(myName);
-            memberListEl.innerHTML = ''; const iAmOwner = (myName === currentGroupInfo.creator);
-            membersSet.forEach(member => {
-                const isMemberBoss = (member === currentGroupInfo.creator); const isMemberAdmin = (currentGroupInfo.admins && currentGroupInfo.admins.includes(member)); let tag = isMemberBoss ? "👑 群主" : (isMemberAdmin ? "🛡️ 管理员" : "");
-                const clickAction = iAmOwner && !isMemberBoss && member !== myName ? `onclick="openMemberAction('${member}')"` : '';
-                const row = document.createElement('div'); row.style = `display:flex; justify-content:space-between; align-items:center; padding:12px 0; border-bottom:1px solid rgba(255,255,255,0.1); ${clickAction ? 'cursor:pointer;' : ''}`;
-                row.innerHTML = `<div ${clickAction}><span style="font-weight:bold; color:#fff;">${member}</span> <span style="font-size:12px; color:#f39c12; font-weight:bold;">${tag}</span></div>${iAmOwner && !isMemberBoss && member !== myName ? '<span style="font-size:12px; color:rgba(255,255,255,0.4);">点此操作 ›</span>' : ''}`;
-                memberListEl.appendChild(row);
+        if (canManage) {
+          div.style.cursor = "pointer";
+          div.onclick = () => showActionModal(sender);
+        }
+
+        div.innerHTML = `
+          <div class="msg-name">${!isMe ? nameTag : '我'}</div>
+          <div class="msg-text ${bubbleClass}" style="${bubbleStyle}">${text}</div>`;
+      }
+
+      const box = document.getElementById('chatContent');
+      box.appendChild(div);
+      setTimeout(() => { box.scrollTop = box.scrollHeight; }, 50);
+    }
+
+    /* ==================== 成员管理弹窗 ==================== */
+    window.showActionModal = function (targetName) {
+      actionTargetName = targetName;
+      const isTargetAdmin = currentGroupInfo.admins.includes(targetName);
+
+      const btnSetAdmin = document.getElementById('btnSetAdmin');
+      btnSetAdmin.innerText = isTargetAdmin ? '撤销管理员' : '设为管理员';
+      btnSetAdmin.onclick = isTargetAdmin ? removeAdminTarget : addAdminTarget;
+
+      get(ref(db, `groups/${currentGroupId}/muted/${targetName}`)).then(muteSnap => {
+        const btnMute = document.getElementById('btnMute');
+        if (muteSnap.exists() && muteSnap.val() > Date.now()) {
+          btnMute.innerText = '解除禁言';
+          btnMute.style.background = 'rgba(52,199,89,0.2)';
+          btnMute.style.color = '#34c759';
+          btnMute.onclick = unmuteTarget;
+        } else {
+          btnMute.innerText = '禁言该用户';
+          btnMute.style.background = 'rgba(255,149,0,0.2)';
+          btnMute.style.color = '#ff9500';
+          btnMute.onclick = muteTarget;
+        }
+      });
+
+      document.getElementById('modalTargetName').innerText = targetName;
+      document.getElementById('actionModal').style.display = 'flex';
+    };
+
+    window.closeActionModal = function () {
+      document.getElementById('actionModal').style.display = 'none';
+    };
+
+    /* ==================== 禁言 ==================== */
+    window.muteTarget = function () {
+      const timeStr = prompt(
+        `禁言【${actionTargetName}】多久？\n支持格式：1m, 1h, 1d\n可输入无限大，例如: 1e+99d (相当于永久禁言)`
+      );
+      if (!timeStr) return;
+      const ms = parseTimeInput(timeStr);
+      if (ms === 0) return alert("时间格式错误！");
+
+      const muteUntil = Date.now() + ms;
+      set(ref(db, `groups/${currentGroupId}/muted/${actionTargetName}`), muteUntil).then(() => {
+        push(ref(db, `groups/${currentGroupId}/messages`), {
+          sender: "📢 系统提示",
+          text: `${actionTargetName} 被禁言 ${timeStr}`,
+          time: Date.now()
+        });
+        closeActionModal();
+      });
+    };
+
+    window.unmuteTarget = function () {
+      remove(ref(db, `groups/${currentGroupId}/muted/${actionTargetName}`)).then(() => {
+        push(ref(db, `groups/${currentGroupId}/messages`), {
+          sender: "📢 系统提示",
+          text: `${actionTargetName} 已被解除禁言`,
+          time: Date.now()
+        });
+        closeActionModal();
+      });
+    };
+
+    window.addAdminTarget = function () {
+      if (myName !== currentGroupInfo.creator) return alert("只有群主才能设管理员！");
+      const admins = currentGroupInfo.admins || [];
+      if (admins.includes(actionTargetName)) return closeActionModal();
+      update(ref(db, 'group_info/' + currentGroupId), { admins: [...admins, actionTargetName] }).then(() => {
+        push(ref(db, `groups/${currentGroupId}/messages`), {
+          sender: "📢 系统提示",
+          text: `${actionTargetName} 被设为管理员`,
+          time: Date.now()
+        });
+        closeActionModal();
+      });
+    };
+
+    window.removeAdminTarget = function () {
+      if (myName !== currentGroupInfo.creator) return alert("只有群主才能撤管理员！");
+      const newAdmins = currentGroupInfo.admins.filter(a => a !== actionTargetName);
+      update(ref(db, 'group_info/' + currentGroupId), { admins: newAdmins }).then(() => {
+        push(ref(db, `groups/${currentGroupId}/messages`), {
+          sender: "📢 系统提示",
+          text: `${actionTargetName} 被撤销管理员`,
+          time: Date.now()
+        });
+        closeActionModal();
+      });
+    };
+
+    window.kickTarget = function () {
+      if (!confirm(`⚠️ 确定将【${actionTargetName}】踢出群聊吗？`)) return;
+      set(ref(db, `groups/${currentGroupId}/kicked/${actionTargetName}`), true).then(() => {
+        push(ref(db, `groups/${currentGroupId}/messages`), {
+          sender: "📢 系统提示",
+          text: `${actionTargetName} 已被踢出`,
+          time: Date.now()
+        });
+        closeActionModal();
+      });
+    };
+
+    /* ==================== 群设置 ==================== */
+    window.openGroupSettings = function () {
+      document.getElementById('settingsModal').style.display = 'flex';
+      document.getElementById('displayGroupId').innerText = currentGroupId;
+      loadMemberList();
+    };
+
+    window.closeSettings = function () {
+      document.getElementById('settingsModal').style.display = 'none';
+    };
+
+    function loadMemberList() {
+      const memberListEl = document.getElementById('memberList');
+      memberListEl.innerHTML = '<div style="text-align:center;color:rgba(255,255,255,0.5);padding:10px;">正在扫描成员...</div>';
+
+      const membersSet = new Set();
+      if (currentGroupInfo.members) currentGroupInfo.members.forEach(m => membersSet.add(m));
+      membersSet.add(currentGroupInfo.creator);
+      membersSet.add(myName);
+
+      memberListEl.innerHTML = '';
+      const iAmOwner = (myName === currentGroupInfo.creator);
+
+      membersSet.forEach(member => {
+        const isMemberBoss = (member === currentGroupInfo.creator);
+        const isMemberAdmin = currentGroupInfo.admins && currentGroupInfo.admins.includes(member);
+        let tag = isMemberBoss ? "👑 群主" : (isMemberAdmin ? "🛡️ 管理员" : "");
+
+        const clickAction = iAmOwner && !isMemberBoss && member !== myName ? `onclick="openMemberAction('${member}')"` : '';
+        const row = document.createElement('div');
+        row.style = `display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid rgba(255,255,255,0.1);${clickAction ? 'cursor:pointer;' : ''}`;
+        row.innerHTML = `
+          <div ${clickAction}>
+            <span style="font-weight:bold;color:#fff;">${member}</span>
+            <span style="font-size:12px;color:#f39c12;font-weight:bold;">${tag}</span>
+          </div>
+          ${iAmOwner && !isMemberBoss && member !== myName ? '<span style="font-size:12px;color:rgba(255,255,255,0.4);">点此操作 ›</span>' : ''}`;
+        memberListEl.appendChild(row);
+      });
+    }
+
+    window.openMemberAction = function (member) {
+      const isAdmin = currentGroupInfo.admins.includes(member);
+      const action = confirm(
+        `对【${member}】的操作：\n\n点击“确定” = ${isAdmin ? '撤销管理员' : '设为管理员'}\n点击“取消” = 踢出群聊`
+      );
+      if (action) {
+        let newAdmins;
+        if (isAdmin) newAdmins = currentGroupInfo.admins.filter(a => a !== member);
+        else newAdmins = [...currentGroupInfo.admins, member];
+        update(ref(db, 'group_info/' + currentGroupId), { admins: newAdmins }).then(() => {
+          push(ref(db, `groups/${currentGroupId}/messages`), {
+            sender: "📢 系统提示",
+            text: isAdmin ? `${member} 被撤销了管理员` : `${member} 被设为管理员`,
+            time: Date.now()
+          });
+          loadMemberList();
+        });
+      } else {
+        if (confirm(`⚠️ 再次确认：将【${member}】踢出群聊？`)) {
+          set(ref(db, `groups/${currentGroupId}/kicked/${member}`), true).then(() => {
+            push(ref(db, `groups/${currentGroupId}/messages`), {
+              sender: "📢 系统提示",
+              text: `${member} 已被踢出`,
+              time: Date.now()
             });
+            loadMemberList();
+          });
         }
+      }
+    };
 
-        window.openMemberAction = function(member) {
-            const isAdmin = currentGroupInfo.admins.includes(member); const action = confirm(`对【${member}】的操作：\n\n点击“确定” = ${isAdmin ? '撤销管理员' : '设为管理员'}\n点击“取消” = 踢出群聊`);
-            if (action) {
-                let newAdmins; if (isAdmin) newAdmins = currentGroupInfo.admins.filter(a => a !== member); else newAdmins = [...currentGroupInfo.admins, member];
-                update(ref(db, 'group_info/' + currentGroupId), { admins: newAdmins }).then(() => { push(ref(db, `groups/${currentGroupId}/messages`), { sender: "📢 系统提示", text: isAdmin ? `${member} 被撤销了管理员` : `${member} 被设为管理员`, time: Date.now() }); loadMemberList(); });
-            } else { if(confirm(`⚠️ 再次确认：将【${member}】踢出群聊？`)) { set(ref(db, `groups/${currentGroupId}/kicked/${member}`), true).then(() => { push(ref(db, `groups/${currentGroupId}/messages`), { sender: "📢 系统提示", text: `${member} 已被踢出`, time: Date.now() }); loadMemberList(); }); } }
-        }
+    window.copyGroupId = function () {
+      navigator.clipboard.writeText(currentGroupId).then(() => {
+        alert("群号已复制！");
+      }).catch(() => {
+        // 兼容旧浏览器
+        const ta = document.createElement('textarea');
+        ta.value = currentGroupId;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        alert("群号已复制！");
+      });
+    };
 
-        window.parseTimeInput = function(input) { if (!input) return 0; input = input.trim().toLowerCase(); if (input.includes('e+') || input.includes('e')) { const numPart = parseFloat(input.replace(/[^0-9.e+]/g, '')); if (isNaN(numPart) || numPart > 1e+10) return 3153600000000; } let num = parseFloat(input); if (isNaN(num)) num = 0; if (input.includes('m')) return num * 60 * 1000; if (input.includes('h')) return num * 60 * 60 * 1000; if (input.includes('d')) return num * 24 * 60 * 60 * 1000; return num * 60 * 1000; }
-        window.muteTarget = function() { const timeStr = prompt(`禁言【${actionTargetName}】多久？\n支持格式：1m, 1h, 1d\n可输入无限大，例如: 1e+99d (相当于永久禁言)`); if(!timeStr) return; const ms = parseTimeInput(timeStr); if (ms === 0) return alert("时间格式错误！"); const muteUntil = Date.now() + ms; set(ref(db, `groups/${currentGroupId}/muted/${actionTargetName}`), muteUntil).then(() => { push(ref(db, `groups/${currentGroupId}/messages`), { sender: "📢 系统提示", text: `${actionTargetName} 被禁言 ${timeStr}`, time: Date.now() }); closeActionModal(); }); }
-        window.unmuteTarget = function() { remove(ref(db, `groups/${currentGroupId}/muted/${actionTargetName}`)).then(() => { push(ref(db, `groups/${currentGroupId}/messages`), { sender: "📢 系统提示", text: `${actionTargetName} 已被解除禁言`, time: Date.now() }); closeActionModal(); }); }
-        window.addAdminTarget = function() { if (myName !== currentGroupInfo.creator) return alert("只有群主才能设管理员！"); update(ref(db, 'group_info/' + currentGroupId), { admins: [...currentGroupInfo.admins, actionTargetName] }).then(() => { push(ref(db, `groups/${currentGroupId}/messages`), { sender: "📢 系统提示", text: `${actionTargetName} 被设为管理员`, time: Date.now() }); closeActionModal(); }); }
-        window.removeAdminTarget = function() { if (myName !== currentGroupInfo.creator) return alert("只有群主才能撤管理员！"); const newAdmins = currentGroupInfo.admins.filter(a => a !== actionTargetName); update(ref(db, 'group_info/' + currentGroupId), { admins: newAdmins }).then(() => { push(ref(db, `groups/${currentGroupId}/messages`), { sender: "📢 系统提示", text: `${actionTargetName} 被撤销管理员`, time: Date.now() }); closeActionModal(); }); }
-        window.kickTarget = function() { if(!confirm(`⚠️ 确定将【${actionTargetName}】踢出群聊吗？`)) return; set(ref(db, `groups/${currentGroupId}/kicked/${actionTargetName}`), true).then(() => { push(ref(db, `groups/${currentGroupId}/messages`), { sender: "📢 系统提示", text: `${actionTargetName} 已被踢出`, time: Date.now() }); closeActionModal(); }); }
-        window.closeActionModal = function() { document.getElementById('actionModal').style.display = 'none'; }
-        window.copyGroupId = function() { navigator.clipboard.writeText(currentGroupId).then(() => { alert("群号已复制！"); }); }
-        
-        // 音乐播放器逻辑
-        function toggleMusicPlayer() { document.getElementById('musicPlayer').classList.toggle('show'); }
-        async function searchMusic() {
-            const query = document.getElementById('musicSearchInput').value.trim(); if (!query) return;
-            const listEl = document.getElementById('songList'); listEl.innerHTML = '<div style="text-align:center; color:rgba(255,255,255,0.4); font-size:12px; padding:20px;">搜索中...</div>';
-            try { const res = await fetch(`https://music-api.gdstudio.xyz/api.php?types=search&source=netease&name=${encodeURIComponent(query)}&count=15&pages=1`); const data = await res.json(); listEl.innerHTML = '';
-                if (data && data.length > 0) { data.forEach(song => { const div = document.createElement('div'); div.className = 'song-item'; div.innerHTML = `${song.name} <br><span style="font-size:12px; color:rgba(255,255,255,0.5);">${song.artist.join(' / ')}</span>`; div.onclick = () => playSong(song.id, div); listEl.appendChild(div); }); } else { listEl.innerHTML = '<div style="text-align:center; color:rgba(255,255,255,0.4); font-size:12px; padding:20px;">没有找到相关歌曲</div>'; }
-            } catch (e) { listEl.innerHTML = '<div style="text-align:center; color:#ff3b30; font-size:12px; padding:20px;">搜索失败，请稍后再试</div>'; }
+    /* ==================== 🎵 音乐播放器（修复） ==================== */
+    // 修复点：改用 addEventListener 绑定 + 修复 CSS 语法 + 高 z-index
+    function initMusicPlayer() {
+      const musicFab = document.getElementById('musicFab');
+      const musicPlayer = document.getElementById('musicPlayer');
+      const closeBtn = musicPlayer.querySelector('.music-close');
+
+      // 显式绑定点击，避免被其它层拦截
+      musicFab.addEventListener('click', function (e) {
+        e.stopPropagation();
+        e.preventDefault();
+        musicPlayer.classList.toggle('show');
+      });
+
+      closeBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        musicPlayer.classList.remove('show');
+      });
+
+      // 搜索框回车
+      const searchInput = document.getElementById('musicSearchInput');
+      searchInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          searchMusic();
         }
-        async function playSong(songId, itemEl) {
-            document.querySelectorAll('.song-item').forEach(el => el.classList.remove('playing')); itemEl.classList.add('playing');
-            const audio = document.getElementById('audioPlayer'); audio.src = '';
-            try { const res = await fetch(`https://music-api.gdstudio.xyz/api.php?types=url&source=netease&id=${songId}&br=320`); const data = await res.json();
-                if (data && data.url) { audio.src = data.url; audio.play(); } else { alert("该歌曲暂无版权或无法获取播放链接"); }
-            } catch (e) { alert("获取播放链接失败"); }
+      });
+    }
+
+    window.searchMusic = async function () {
+      const queryInput = document.getElementById('musicSearchInput');
+      const query = queryInput.value.trim();
+      if (!query) return;
+
+      const listEl = document.getElementById('songList');
+      listEl.innerHTML = '<div style="text-align:center;color:rgba(255,255,255,0.4);font-size:12px;padding:20px;">搜索中...</div>';
+
+      try {
+        const res = await fetch(
+          `https://music-api.gdstudio.xyz/api.php?types=search&source=netease&name=${encodeURIComponent(query)}&count=15&pages=1`
+        );
+        const data = await res.json();
+        listEl.innerHTML = '';
+
+        if (data && data.length > 0) {
+          data.forEach(song => {
+            const div = document.createElement('div');
+            div.className = 'song-item';
+            div.innerHTML = `
+              ${song.name}
+              <br>
+              <span style="font-size:12px;color:rgba(255,255,255,0.5);">
+                ${Array.isArray(song.artist) ? song.artist.join(' / ') : (song.artist || '未知')}
+              </span>`;
+            div.onclick = () => playSong(song.id, div);
+            listEl.appendChild(div);
+          });
+        } else {
+          listEl.innerHTML = '<div style="text-align:center;color:rgba(255,255,255,0.4);font-size:12px;padding:20px;">没有找到相关歌曲</div>';
         }
-    </script>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; -webkit-tap-highlight-color: transparent;}
-        body { background: #000; color: #fff; height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; position: relative; }
-        body::before { content: ''; position: fixed; top: -50vh; left: -50vw; width: 200vw; height: 200vh; background: radial-gradient(circle at 20% 30%, rgba(100,200,255,0.4) 0%, transparent 40%), radial-gradient(circle at 80% 70%, rgba(255,100,200,0.4) 0%, transparent 40%); animation: spin 20s linear infinite; filter: blur(40px); z-index: -1; }
-        @keyframes spin { 100% { transform: rotate(360deg); } }
-        #loginScreen, #lobbyScreen, #chatScreen { display: none; flex: 1; flex-direction: column; height: 100%; overflow: hidden; }
-        #loginScreen { justify-content: center; align-items: center; }
-        .login-box { background: rgba(255,255,255,0.05); backdrop-filter: blur(30px); -webkit-backdrop-filter: blur(30px); padding: 40px 30px; border-radius: 24px; width: 85%; max-width: 340px; box-shadow: 0 30px 60px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.2); border-top-color: rgba(255,255,255,0.5); display: flex; flex-direction: column; }
-        .login-box h1 { text-align:center; margin-bottom: 30px; font-size: 32px; font-weight: 800; letter-spacing: -1px; color: #fff; text-shadow: 0 0 20px rgba(255,255,255,0.3);}
-        .login-box input { width: 100%; padding: 16px; border: 1px solid rgba(255,255,255,0.1); border-radius: 14px; margin-bottom: 15px; outline: none; font-size: 16px; background: rgba(0,0,0,0.3); color: #fff; transition: 0.2s; }
-        .login-box input:focus { border-color: rgba(255,255,255,0.5); background: rgba(0,0,0,0.5); }
-        .lobby-header { background: rgba(0,0,0,0.3); backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255,255,255,0.1); padding: 20px; font-size: 20px; font-weight: 800; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; color: #fff; }
-        .logout-btn { background: rgba(255,59,48,0.15); border: 1px solid rgba(255,59,48,0.3); color: #ff453a; font-size: 13px; font-weight: 600; cursor: pointer; padding: 6px 12px; border-radius: 10px; transition: 0.2s; }
-        .lobby-btns { padding: 20px; display: flex; gap: 10px; flex-shrink: 0;}
-        .lobby-btns button { flex: 1; padding: 14px; border: 1px solid rgba(0,122,255,0.5); border-radius: 14px; font-weight: bold; font-size: 15px; cursor: pointer; background: rgba(0,122,255,0.2); color: #0a84ff; box-shadow: 0 8px 20px rgba(0,122,255,0.15); backdrop-filter: blur(10px); transition: 0.2s; }
-        .btn-join-box { display: flex; gap: 10px; padding: 0 20px 20px 20px; flex-shrink: 0;}
-        .btn-join-box input { flex: 1; padding: 14px; border: 1px solid rgba(255,255,255,0.1); border-radius: 14px; outline: none; font-size: 15px; background: rgba(0,0,0,0.3); color: #fff; }
-        .btn-join-box button { padding: 0 20px; background: rgba(52,199,89,0.2); border: 1px solid rgba(52,199,89,0.5); color: #30d158; border-radius: 14px; font-weight: bold; box-shadow: 0 8px 20px rgba(52,199,89,0.15); backdrop-filter: blur(10px); transition: 0.2s; }
-        .group-list { flex: 1; overflow-y: auto; padding: 10px 20px; -webkit-overflow-scrolling: touch;}
-        .chat-item { display: flex; align-items: center; padding: 16px; margin-bottom: 12px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 18px; box-shadow: 0 10px 20px rgba(0,0,0,0.2); cursor: pointer; transition: 0.2s; backdrop-filter: blur(10px); }
-        .chat-item:active { transform: scale(0.97); background: rgba(255,255,255,0.1); }
-        .avatar { width: 48px; height: 48px; border-radius: 14px; background: linear-gradient(135deg, #00c6ff, #0072ff); display: flex; justify-content: center; align-items: center; font-size: 22px; margin-right: 15px; color: white; box-shadow: 0 4px 10px rgba(0,122,255,0.3); }
-        .info .name { font-size: 17px; font-weight: 600; color: #fff;}
-        .header { background: rgba(0,0,0,0.3); backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255,255,255,0.1); padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
-        .header-left { display: flex; align-items: center; gap: 15px; }
-        .header h1 { font-size: 18px; font-weight: 700; color: #fff; margin: 0; text-shadow: 0 2px 5px rgba(0,0,0,0.5);}
-        .leave-btn { background: none; border: none; color: #0a84ff; font-size: 16px; cursor: pointer; font-weight: 600;}
-        .settings-btn { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); font-size: 20px; cursor: pointer; color: #fff; border-radius: 10px; padding: 5px 12px; transition: 0.2s; }
-        .settings-btn:active { background: rgba(255,255,255,0.2); transform: scale(0.95); }
-        .chat-content { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; -webkit-overflow-scrolling: touch; }
-        .msg { display: flex; flex-direction: column; max-width: 80%; }
-        .msg.mine { align-self: flex-end; align-items: flex-end; }
-        .msg.theirs { align-self: flex-start; align-items: flex-start; }
-        .msg-name { font-size: 12px; color: rgba(255,255,255,0.6); margin-bottom: 6px; font-weight: 500;}
-        .msg-text { padding: 14px 18px; border-radius: 20px; font-size: 16px; line-height: 1.4; word-break: break-all; transition: background 0.2s; box-shadow: 0 4px 15px rgba(0,0,0,0.2); backdrop-filter: blur(10px); }
-        .msg.theirs .msg-text:hover { background: rgba(255,255,255,0.15) !important; }
-        .msg.mine .msg-text { background: linear-gradient(135deg, #0072ff, #00c6ff); color: #fff; border-bottom-right-radius: 4px; border: 1px solid rgba(255,255,255,0.2); }
-        .msg.theirs .msg-text { background: rgba(255,255,255,0.1); color: #fff; border-bottom-left-radius: 4px; border: 1px solid rgba(255,255,255,0.15); }
-        .admin-glow { background: linear-gradient(135deg, #ff0844 0%, #ffb199 100%) !important; color: #fff !important; font-weight: bold; border: 1px solid rgba(255,255,255,0.3) !important; box-shadow: 0 0 20px rgba(255, 8, 68, 0.6) !important; animation: pulse 2s infinite; text-shadow: 0 1px 3px rgba(0,0,0,0.5); }
-        @keyframes pulse { 0% { box-shadow: 0 0 10px rgba(255, 8, 68, 0.4); } 50% { box-shadow: 0 0 25px rgba(255, 8, 68, 0.8); } 100% { box-shadow: 0 0 10px rgba(255, 8, 68, 0.4); } }
-        .input-area { padding: 15px 20px; background: rgba(0,0,0,0.4); backdrop-filter: blur(20px); border-top: 1px solid rgba(255,255,255,0.1); display: flex; gap: 12px; flex-shrink: 0; padding-bottom: calc(15px + env(safe-area-inset-bottom)); }
-        .input-area input { flex: 1; padding: 14px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.05); color: #fff; outline: none; font-size:16px; }
-        .input-area input:focus { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.3); }
-        .input-area button { padding: 0 24px; border-radius: 16px; background: linear-gradient(135deg, #0072ff, #00c6ff); color: white; border: none; font-weight: bold; font-size:16px; box-shadow: 0 8px 20px rgba(0,122,255,0.3); }
-        #actionModal, #settingsModal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); backdrop-filter: blur(10px); display: none; justify-content: center; align-items: center; z-index: 999; }
-        .action-box, .modal-box { background: rgba(30,30,30,0.8); backdrop-filter: blur(30px); border: 1px solid rgba(255,255,255,0.15); width: 85%; max-width: 340px; padding: 24px; border-radius: 24px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 30px 60px rgba(0,0,0,0.5); max-height: 80vh; overflow-y: auto; }
-        .action-box h3, .modal-box h3 { text-align: center; margin-bottom: 10px; color: #fff; font-size: 18px; font-weight: 700;}
-        .action-box button, .modal-box button { padding: 14px; border: none; border-radius: 14px; font-weight: 600; font-size: 16px; cursor: pointer; transition: 0.2s;}
-        .btn-close { background: rgba(255,255,255,0.1); color: #fff; margin-top: 10px; }
-        .member-list { margin-top: 10px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 10px; }
-        .btn-login { background: linear-gradient(135deg, #0072ff, #00c6ff); box-shadow: 0 8px 25px rgba(0,122,255,0.4); color: white; }
-        .btn-one-click { background: rgba(0,122,255,0.15); color: #0a84ff; border: 1px solid rgba(0,122,255,0.3); }
-        
-        /* 悬浮音乐播放器层级修复：绝对置于最高层，并且点击不被遮挡 */
-        .music-fab { 
-            position: fixed; bottom: 90px; right: 20px; width: 50px; height: 50px; 
-            background: linear-gradient(135deg, #ff0080, #7928ca); border-radius: 50%; 
-            display: flex; justify-content: center; align-items: center; font-size: 24px; 
-            cursor: pointer; z-index: 99999; /* 修复层级 */ 
-            box-shadow: 0 10px 25px rgba(255,0,128,0.4); transition: 0.3s; 
-            pointer-events: auto;
+      } catch (e) {
+        console.error(e);
+        listEl.innerHTML = '<div style="text-align:center;color:#ff3b30;font-size:12px;padding:20px;">搜索失败，请稍后再试</div>';
+      }
+    };
+
+    window.playSong = async function (songId, itemEl) {
+      document.querySelectorAll('.song-item').forEach(el => el.classList.remove('playing'));
+      itemEl.classList.add('playing');
+
+      const audio = document.getElementById('audioPlayer');
+      audio.src = '';
+
+      try {
+        const res = await fetch(
+          `https://music-api.gdstudio.xyz/api.php?types=url&source=netease&id=${songId}&br=320`
+        );
+        const data = await res.json();
+        if (data && data.url) {
+          audio.src = data.url;
+          audio.play().catch(err => {
+            console.warn('播放被阻止', err);
+            alert('播放被浏览器拦截，请再次点击播放按钮');
+          });
+        } else {
+          alert("该歌曲暂无版权或无法获取播放链接");
         }
-        .music-fab:active { transform: scale(0.9); }
-        
-        #musicPlayer { 
-            position: fixed; bottom: -100%; left: 5%; width: 90%; max-width: 400px; 
-            background: rgba(30,30,30,0.95); backdrop-filter: blur(30px); border: 1px solid rgba(255,255,255,0.2); 
-            border-radius: 24px; padding: 20px; z-index: 100000; /* 修复层级 */
-            transition: bottom 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); 
-            box-shadow: 0 30px 60px rgba(0,0,0,0.8); display: flex; flex-direction: column; gap: 15px; 
-        }
-        #musicPlayer.show { bottom: 20px; }
-        
-        .music-header { display: flex; justify-content: space-between; align-items: center; color: #fff; font-weight: bold; }
-        .music-close { background: none; border: none; color: #ff3b30; font-size: 18px; cursor: pointer; font-weight: bold;}
-        .search-box { display: flex; gap: 10px; }
-        .search-box input { flex: 1; padding: 12px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.4); color: #fff; outline: none; font-size: 14px;}
-        .search-box button { padding: 0 20px; border-radius: 12px; background: #007aff; color: #fff; border: none; font-weight: bold; cursor: pointer;}
-        .song-list { max-height: 200px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; -webkit-overflow-scrolling: touch;}
-        .song-item { padding: 12px; background: rgba(255,255,255,0.05); border-radius: 10px; color: #fff; font-size: 14px; cursor: pointer; transition: 0.2s; border: 1px solid rgba(255,255,255,0.05);}
-        .song-item:active { background: rgba(255,255,255,0.15); }
-        .song-item.playing { border-color: #007aff; color: #007aff; font-weight: bold; }
-        .audio-controls { display: flex; align-items: center; gap: 10px; margin-top: 10px;}
-        audio { width: 100%; height: 40px; filter: invert(1) hue-rotate(180deg); border-radius: 10px; outline: none;}
-    </style>
+      } catch (e) {
+        alert("获取播放链接失败");
+      }
+    };
+
+    // 页面加载后初始化音乐播放器
+    document.addEventListener('DOMContentLoaded', initMusicPlayer);
+  </script>
+  <style>
+    /* ==================== 基础重置 ==================== */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+    body {
+      background: #000;
+      color: #fff;
+      height: 100vh;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      position: relative;
+    }
+    body::before {
+      content: '';
+      position: fixed;
+      top: -50vh;
+      left: -50vw;
+      width: 200vw;
+      height: 200vh;
+      background:
+        radial-gradient(circle at 20% 30%, rgba(100,200,255,0.4) 0%, transparent 40%),
+        radial-gradient(circle at 80% 70%, rgba(255,100,200,0.4) 0%, transparent 40%);
+      animation: spin 20s linear infinite;
+      filter: blur(40px);
+      z-index: -1;
+    }
+    @keyframes spin { 100% { transform: rotate(360deg); } }
+
+    #loginScreen, #lobbyScreen, #chatScreen {
+      display: none;
+      flex: 1;
+      flex-direction: column;
+      height: 100%;
+      overflow: hidden;
+    }
+    #loginScreen { justify-content: center; align-items: center; }
+
+    /* ==================== 登录页 ==================== */
+    .login-box {
+      background: rgba(255,255,255,0.05);
+      backdrop-filter: blur(30px);
+      -webkit-backdrop-filter: blur(30px);
+      padding: 40px 30px;
+      border-radius: 24px;
+      width: 85%;
+      max-width: 340px;
+      box-shadow: 0 30px 60px rgba(0,0,0,0.5);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-top-color: rgba(255,255,255,0.5);
+      display: flex;
+      flex-direction: column;
+    }
+    .login-box h1 {
+      text-align: center;
+      margin-bottom: 30px;
+      font-size: 32px;
+      font-weight: 800;
+      letter-spacing: -1px;
+      color: #fff;
+      text-shadow: 0 0 20px rgba(255,255,255,0.3);
+    }
+    .login-box input {
+      width: 100%;
+      padding: 16px;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 14px;
+      margin-bottom: 15px;
+      outline: none;
+      font-size: 16px;
+      background: rgba(0,0,0,0.3);
+      color: #fff;
+      transition: 0.2s;
+    }
+    .login-box input:focus {
+      border-color: rgba(255,255,255,0.5);
+      background: rgba(0,0,0,0.5);
+    }
+
+    /* ==================== 大厅 ==================== */
+    .lobby-header {
+      background: rgba(0,0,0,0.3);
+      backdrop-filter: blur(20px);
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+      padding: 20px;
+      {
+ font-size: 20px;
+      font-weight: 800     ;
+      display: flex;
+      justify-content: space-between;
+ flex      align-items: center;
+      flex-shrink: 0;
+:      color: #fff;
+    }
+    .logout-btn {
+       background: rgba(255,59,48,0.15);
+      border: 1px solid1 rgba(255,59,48,0.3);
+      color: #ff453a;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      padding: 6px 12px;
+      border-radius: 10px;
+      transition: 0.2s;
+    }
+    .lobby-btns {
+      padding: 20px;
+      display: flex;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+    .lobby-btns button {
+      flex: 1;
+      padding: 14px;
+      border: 1px solid rgba(0,122,255,0.5);
+      border-radius: 14px;
+      font-weight: bold;
+      font-size: 15px;
+      cursor: pointer;
+      background: rgba(0,122,255,0.2);
+      color: #0a84ff;
+      box-shadow: 0 8px 20px rgba(0,122,255,0.15);
+      backdrop-filter: blur(10px);
+      transition: 0.2s;
+    }
+    .btn-join-box {
+      display: flex;
+      gap: 10px;
+      padding: 0 20px 20px 20px;
+      flex-shrink: 0;
+    }
+    .btn-join-box input {
+      flex: 1;
+      padding: 14px;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 14px;
+      outline: none;
+      font-size: 15px;
+      background: rgba(0,0,0,0.3);
+      color: #fff;
+    }
+    .btn-join-box button {
+      padding: 0 20px;
+      background: rgba(52,199,89,0.2);
+      border: 1px solid rgba(52,199,89,0.5);
+      color: #30d158;
+      border-radius: 14px;
+      font-weight: bold;
+      box-shadow: 0 8px 20px rgba(52,199,89,0.15);
+      backdrop-filter: blur(10px);
+      transition: 0.2s;
+    }
+    .group-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px 20px;
+      -webkit-overflow-scrolling: touch;
+    }
+    .chat-item {
+      display: flex;
+      align-items: center;
+      padding: 16px;
+      margin-bottom: 12px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 18px;
+      box-shadow: 0 10px 20px rgba(0,0,0,0.2);
+      cursor: pointer;
+      transition: 0.2s;
+      backdrop-filter: blur(10px);
+    }
+    .chat-item:active {
+      transform: scale(0.97);
+      background: rgba(255,255,255,0.1);
+    }
+    .avatar {
+      width: 48px;
+      height: 48px;
+      border-radius: 14px;
+      background: linear-gradient(135deg, #00c6ff, #0072ff);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      font-size: 22px;
+      margin-right: 15px;
+      color: white;
+      box-shadow: 0 4px 10px rgba(0,122,255,0.3);
+    }
+    .info .name {
+      font-size: 17px;
+      font-weight: 600;
+      color: #fff;
+    }
+
+    /* ==================== 聊天 ==================== */
+    .header {
+      background: rgba(0,0,0,0.3);
+      backdrop-filter: blur(20px);
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+      padding: 15px 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-shrink: 0;
+    }
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+    }
+    .header h1 {
+      font-size: 18px;
+      font-weight: 700;
+      color: #fff;
+      margin: 0;
+      text-shadow: 0 2px 5px rgba(0,0,0,0.5);
+    }
+    .leave-btn {
+      background: none;
+      border: none;
+      color: #0a84ff;
+      font-size: 16px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .settings-btn {
+      background: rgba(255,255,255,0.1);
+      border: 1px solid rgba(255,255,255,0.2);
+      font-size: 20px;
+      cursor: pointer;
+      color: #fff;
+      border-radius: 10px;
+      padding: 5px 12px;
+      transition: 0.2s;
+    }
+    .settings-btn:active {
+      background: rgba(255,255,255,0.2);
+      transform: scale(0.95);
+    }
+    .chat-content;
+      padding: 20px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      -webkit-overflow-scrolling: touch;
+    }
+    .msg {
+      display: flex;
+      flex-direction: column;
+      max-width: 80%;
+    }
+    .msg.mine {
+      align-self: flex-end;
+      align-items: flex-end;
+    }
+    .msg.theirs {
+      align-self: flex-start;
+      align-items: flex-start;
+    }
+    .msg-name {
+      font-size: 12px;
+      color: rgba(255,255,255,0.6);
+      margin-bottom: 6px;
+      font-weight: 500;
+    }
+    .msg-text {
+      padding: 14px 18px;
+      border-radius: 20px;
+      font-size: 16px;
+      line-height: 1.4;
+      word-break: break-all;
+      transition: background 0.2s;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+      backdrop-filter: blur(10px);
+    }
+    .msg.theirs .msg-text:hover {
+      background: rgba(255,255,255,0.15) !important;
+    }
+    .msg.mine .msg-text {
+      background: linear-gradient(135deg, #0072ff, #00c6ff);
+      color: #fff;
+      border-bottom-right-radius: 4px;
+      border: 1px solid rgba(255,255,255,0.2);
+    }
+    .msg.theirs .msg-text {
+      background: rgba(255,255,255,0.1);
+      color: #fff;
+      border-bottom-left-radius: 4px;
+      border: 1px solid rgba(255,255,255,0.15);
+    }
+    /* 系统公告金色特效 */
+    .admin-glow {
+      background: linear-gradient(135deg, #ff0844 0%, #ffb199 100%) !important;
+      color: #fff !important;
+      font-weight: bold;
+      border: 1px solid rgba(255,255,255,0.3) !important;
+      box-shadow: 0 0 20px rgba(255, 8, 68, 0.6) !important;
+      animation: pulse 2s infinite;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.5);
+    }
+    /* 作者粉红呼吸发光气泡 */
+    .author-glow {
+      background: linear-gradient(135deg, #ff0080, #7928ca) !important;
+      color: #fff !important;
+      font-weight: bold;
+      border: 1px solid rgba(255, 0, 128, 0.8) !important;
+      box-shadow: 0 0 25px rgba(255, 0, 128, 0.8) !important;
+      animation: authorPulse 1.8s infinite;
+      text-shadow: 0 0 8px rgba(255,255,255,0.8);
+    }
+    @keyframes pulse {
+      0% { box-shadow: 0 0 10px rgba(255, 8, 68, 0.4); }
+      50% { box-shadow: 0 0 25px rgba(255, 8, 68, 0.8); }
+      100% { box-shadow: 0 0 10px rgba(255, 8, 68, 0.4); }
+    }
+    @keyframes authorPulse {
+      0% { box-shadow: 0 0 15px rgba(255, 0, 128, 0.6); }
+      50% { box-shadow: 0 0 35px rgba(255, 0, 128, 1); }
+      100% { box-shadow: 0 0 15px rgba(255, 0, 128, 0.6); }
+    }
+    .input-area {
+      padding: 15px 20px;
+      background: rgba(0,0,0,0.4);
+      backdrop-filter: blur(20px);
+      border-top: 1px solid rgba(255,255,255,0.1);
+      display: flex;
+      gap: 12px;
+      flex-shrink: 0;
+      padding-bottom: calc(15px + env(safe-area-inset-bottom));
+    }
+    .input-area input {
+      flex: 1;
+      padding: 14px;
+      border-radius: 16px;
+      border: 1px solid rgba(255,255,255,0.1);
+      background: rgba(255,255,255,0.05);
+      color: #fff;
+      outline: none;
+      font-size: 16px;
+    }
+    .input-area input:focus {
+      background: rgba(255,255,255,0.1);
+      border-color: rgba(255,255,255,0.3);
+    }
+    .input-area button {
+      padding: 0 24px;
+      border-radius: 16px;
+      background: linear-gradient(135deg, #0072ff, #00c6ff);
+      color: white;
+      border: none;
+      font-weight: bold;
+      font-size: 16px;
+      box-shadow: 0 8px 20px rgba(0,122,255,0.3);
+    }
+
+    /* ==================== 弹窗 ==================== */
+    #actionModal, #settingsModal {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0,0,0,0.6);
+      backdrop-filter: blur(10px);
+      display: none;
+      justify-content: center;
+      align-items: center;
+      z-index: 999;
+    }
+    .action-box, .modal-box {
+      background: rgba(30,30,30,0.8);
+      backdrop-filter: blur(30px);
+      border: 1px solid rgba(255,255,255,0.15);
+      width: 85%;
+      max-width: 340px;
+      padding: 24px;
+      border-radius: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      box-shadow: 0 30px 60px rgba(0,0,0,0.5);
+      max-height: 80vh;
+      overflow-y: auto;
+    }
+    .action-box h3, .modal-box h3 {
+      text-align: center;
+      margin-bottom: 10px;
+      color: #fff;
+      font-size: 18px;
+      font-weight: 700;
+    }
+    .action-box button, .modal-box button {
+      padding: 14px;
+      border: none;
+      border-radius: 14px;
+      font-weight: 600;
+      font-size: 16px;
+      cursor: pointer;
+      transition: 0.2s;
+    }
+    .btn-close {
+      background: rgba(255,255,255,0.1);
+      color: #fff;
+      margin-top: 10px;
+    }
+    .member-list {
+      margin-top: 10px;
+      border-top: 1px solid rgba(255,255,255,0.1);
+      padding-top: 10px;
+    }
+    .btn-login {
+      background: linear-gradient(135deg, #0072ff, #00c6ff);
+      box-shadow: 0 8px 25px rgba(0,122,255,0.4);
+      color: white;
+    }
+    .btn-one-click {
+      background: rgba(0,122,255,0.15);
+      color: #0a84ff;
+      border: 1px solid rgba(0,122,255,0.3);
+    }
+
+    /* ==================== 🎵 音乐播放器修复 ==================== */
+    .music-fab {
+      position: fixed;
+      bottom: 90px;
+      right: 20px;
+      width: 50px;
+      height: 50px;
+      background: linear-gradient(135deg, #ff0080, #7928ca);
+      border-radius: 50%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      font-size: 24px;
+      cursor: pointer;
+      z-index: 2147483647; /* 极限最高层级 */
+      box-shadow: 0 10px 25px rgba(255,0,128,0.4);
+      transition: transform 0.3s;
+      user-select: none;
+    }
+    .music-fab:active {
+      transform: scale(0.9);
+    }
+
+    #musicPlayer {
+      position: fixed;
+      bottom: -100%;
+      left: 5%;
+      width: 90%;
+      max-width: 400px;
+      background: rgba(30,30,30,0.95);
+      backdrop-filter: blur(30px);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 24px;
+      padding: 20px;
+      z-index: 2147483647;
+      transition: bottom 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+      box-shadow: 0 30px 60px rgba(0,0,0,0.8);
+      display: flex;
+      flex-direction: column;
+      gap: 15px;
+    }
+    #musicPlayer.show {
+      bottom: 20px;
+    }
+    .music-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      color: #fff;
+      font-weight: bold;
+    }
+    .music-close {
+      background: none;
+      border: none;
+      color: #ff3b30;
+      font-size: 18px;
+      cursor: pointer;
+      font-weight: bold;
+    }
+    .search-box {
+      display: flex;
+      gap: 10px;
+    }
+    .search-box input {
+      flex: 1;
+      padding: 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.1);
+      background: rgba(0,0,0,0.4);
+      color: #fff;
+      outline: none;
+      font-size: 14px;
+    }
+    .search-box button {
+      padding: 0 20px;
+      border-radius: 12px;
+      background: #007aff;
+      color: #fff;
+      border: none;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    .song-list {
+      max-height: 200px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      -webkit-overflow-scrolling: touch;
+    }
+    .song-item {
+      padding: 12px;
+      background: rgba(255,255,255,0.05);
+      border-radius: 10px;
+      color: #fff;
+      font-size: 14px;
+      cursor: pointer;
+      transition: 0.2s;
+      border: 1px solid rgba(255,255,255,0.05);
+    }
+    .song-item:active {
+      background: rgba(255,255,255,0.15);
+    }
+    .song-item.playing {
+      border-color: #007aff;
+      color: #007aff;
+      font-weight: bold;
+    }
+    .audio-controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    audio {
+      width: 100%;
+      height: 40px;
+      filter: invert(1) hue-rotate(180deg);
+      border-radius: 10px;
+      outline: none;
+    }
+  </style>
 </head>
 <body>
-    <div id="loginScreen">
-        <div class="login-box">
-            <h1>Chat</h1>
-            <input type="text" id="username" placeholder="账号">
-            <input type="password" id="password" placeholder="密码">
-            <button class="btn-login" onclick="loginOrRegister()" style="width:100%; padding:16px; border:none; border-radius:14px; font-weight:bold; font-size:16px; margin-bottom: 15px;">登录 / 注册</button>
-            <button id="oneClickLoginBtn" class="btn-one-click" onclick="doOneClickLogin()" style="width:100%; padding:16px; border:none; border-radius:14px; font-weight:bold; font-size:16px; display:none;">一键登录</button>
-        </div>
+  <!-- 登录页 -->
+  <div id="loginScreen">
+    <div class="login-box">
+      <h1>Chat</h1>
+      <input type="text" id="username" placeholder="账号" autocomplete="username">
+      <input type="password" id="password" placeholder="密码" autocomplete="current-password">
+      <button class="btn-login" onclick="loginOrRegister()"
+        style="width:100%;padding:16px;border:none;border-radius:14px;font-weight:bold;font-size:16px;margin-bottom:15px;">
+        登录 / 注册
+      </button>
+      <button id="oneClickLoginBtn" class="btn-one-click" onclick="doOneClickLogin()"
+        style="width:100%;padding:16px;border:none;border-radius:14px;font-weight:bold;font-size:16px;display:none;">
+        一键登录
+      </button>
     </div>
+  </div>
 
-    <div id="lobbyScreen">
-        <div class="lobby-header">
-            <span>聊天大厅</span>
-            <div style="display:flex; align-items:center; gap:15px;">
-                <span id="myNameDisplay" style="font-size:14px; color:#00c6ff; font-weight:700;"></span>
-                <button class="logout-btn" onclick="deleteAccount()">注销</button>
-            </div>
-        </div>
-        <div class="lobby-btns"><button class="btn-create" onclick="createGroup()">➕ 创建新群聊</button></div>
-        <div class="btn-join-box"><input type="text" id="joinGroupId" placeholder="输入群号加入"><button onclick="joinGroup()">加入</button></div>
-        <div class="group-list" id="myGroupList"></div>
+  <!-- 大厅 -->
+  <div id="lobbyScreen">
+    <div class="lobby-header">
+      <span>聊天大厅</span>
+      <div style="display:flex;align-items:center;gap:15px;">
+        <span id="myNameDisplay" style="font-size:14px;color:#00c6ff;font-weight:700;"></span>
+        <button class="logout-btn" onclick="deleteAccount()">注销</button>
+      </div>
     </div>
+    <div class="lobby-btns">
+      <button class="btn-create" onclick="createGroup()">➕ 创建新群聊</button>
+    </div>
+    <div class="btn-join-box">
+      <input type="text" id="joinGroupId" placeholder="输入群号加入">
+      <button onclick="joinGroup()">加入</button>
+    </div>
+    <div class="group-list" id="myGroupList"></div>
+  </div>
 
-    <div id="chatScreen">
-        <div class="header">
-            <div class="header-left"><button class="leave-btn" onclick="goLobby()">〈 大厅</button><h1 id="displayGroupName">群聊</h1></div>
-            <button class="settings-btn" onclick="openGroupSettings()">⚙️</button>
-        </div>
-        <div class="chat-content" id="chatContent"></div>
-        <div class="input-area">
-            <input type="text" id="msgInput" placeholder="输入消息..." onkeypress="handleEnter(event)">
-            <button onclick="sendMsg()">发送</button>
-        </div>
+  <!-- 聊天 -->
+  <div id="chatScreen">
+    <div class="header">
+      <div class="header-left">
+        <button class="leave-btn" onclick="goLobby()">〈 大厅</button>
+        <h1 id="displayGroupName">群聊</h1>
+      </div>
+      <button class="settings-btn" onclick="openGroupSettings()">⚙️</button>
     </div>
+    <div class="chat-content" id="chatContent"></div>
+    <div class="input-area">
+      <input type="text" id="msgInput" placeholder="输入消息..." onkeypress="handleEnter(event)">
+      <button onclick="sendMsg()">发送</button>
+    </div>
+  </div>
 
-    <div id="actionModal">
-        <div class="action-box">
-            <h3>管理 <span id="modalTargetName" style="color:#00c6ff;"></span></h3>
-            <button id="btnSetAdmin" style="background: rgba(0,122,255,0.15); color: #0a84ff; border: 1px solid rgba(0,122,255,0.3);"></button>
-            <button id="btnMute" style="background: rgba(255,149,0,0.15); color: #ff9500; border: 1px solid rgba(255,149,0,0.3);"></button>
-            <button onclick="kickTarget()" style="background: rgba(255,59,48,0.15); color: #ff453a; border: 1px solid rgba(255,59,48,0.3);">踢出群聊</button>
-            <button class="btn-close" onclick="closeActionModal()">取消</button>
-        </div>
+  <!-- 成员操作弹窗 -->
+  <div id="actionModal">
+    <div class="action-box">
+      <h3>管理 <span id="modalTargetName" style="color:#00c6ff;"></span></h3>
+      <button id="btnSetAdmin"
+        style="background:rgba(0,122,255,0.15);color:#0a84ff;border:1px solid rgba(0,122,255,0.3);"></button>
+      <button id="btnMute"
+        style="background:rgba(255,149,0,0.15);color:#ff9500;border:1px solid rgba(255,149,0,0.3);"></button>
+      <button onclick="kickTarget()"
+        style="background:rgba(255,59,48,0.15);color:#ff453a;border:1px solid rgba(255,59,48,0.3);">踢出群聊</button>
+      <button class="btn-close" onclick="closeActionModal()">取消</button>
     </div>
+  </div>
 
-    <div id="settingsModal">
-        <div class="modal-box">
-            <h3>群聊设置</h3>
-            <div style="background: rgba(0,0,0,0.4); padding: 10px; border-radius: 14px; margin-bottom: 15px; text-align: center; font-size: 14px; border: 1px solid rgba(255,255,255,0.05);">
-                群号：<strong id="displayGroupId" style="color: #00c6ff; font-size: 18px; text-shadow: 0 0 10px rgba(0,198,255,0.5);"></strong>
-                <button onclick="copyGroupId()" style="width: auto; padding: 5px 10px; margin: 5px auto 0; display: block; background: rgba(0,122,255,0.2); color: #0a84ff; font-size: 12px; border-radius:6px; border:1px solid rgba(0,122,255,0.3);">一键复制</button>
-            </div>
-            <div class="member-list">
-                <h4 style="margin-bottom: 10px; color:#fff; font-size:15px; text-align:left;">群成员管理</h4>
-                <div id="memberList"></div>
-            </div>
-            <button onclick="leaveGroup()" style="background: rgba(255,59,48,0.15); color: #ff453a; border: 1px solid rgba(255,59,48,0.3); margin-top: 20px;">退出群聊</button>
-            <button class="btn-close" onclick="closeSettings()">关闭</button>
-        </div>
+  <!-- 群设置弹窗 -->
+  <div id="settingsModal">
+    <div class="modal-box">
+      <h3>群聊设置</h3>
+      <div
+        style="background:rgba(0,0,0,0.4);padding:10px;border-radius:14px;margin-bottom:15px;text-align:center;font-size:14px;border:1px solid rgba(255,255,255,0.05);">
+        群号：<strong id="displayGroupId"
+          style="color:#00c6ff;font-size:18px;text-shadow:0 0 10px rgba(0,198,255,0.5);"></strong>
+        <button onclick="copyGroupId()"
+          style="width:auto;padding:5px 10px;margin:5px auto 0;display:block;background:rgba(0,122,255,0.2);color:#0a84ff;font-size:12px;border-radius:6px;border:1px solid rgba(0,122,255,0.3);">一键复制</button>
+      </div>
+      <div class="member-list">
+        <h4 style="margin-bottom:10px;color:#fff;font-size:15px;text-align:left;">群成员管理</h4>
+        <div id="memberList"></div>
+      </div>
+      <button onclick="leaveGroup()"
+        style="background:rgba(255,59,48,0.15);color:#ff453a;border:1px solid rgba(255,59,48,0.3);margin-top:20px;">退出群聊</button>
+      <button class="btn-close" onclick="closeSettings()">关闭</button>
     </div>
+  </div>
 
-    <!-- 修复了层级与点击穿透的问题 -->
-    <div class="music-fab" onclick="toggleMusicPlayer()">🎵</div>
-    <div id="musicPlayer">
-        <div class="music-header">
-            <span>🎵 全网音乐搜索</span>
-            <button class="music-close" onclick="toggleMusicPlayer()">✕</button>
-        </div>
-        <div class="search-box">
-            <input type="text" id="musicSearchInput" placeholder="输入歌名或歌手..." onkeypress="if(event.key==='Enter') searchMusic()">
-            <button onclick="searchMusic()">搜索</button>
-        </div>
-        <div class="song-list" id="songList">
-            <div style="text-align:center; color:rgba(255,255,255,0.4); font-size:12px; padding:20px;">输入歌名，回车搜索全网音乐</div>
-        </div>
-        <div class="audio-controls">
-            <audio id="audioPlayer" controls></audio>
-        </div>
+  <!-- 音乐播放器 -->
+  <div class="music-fab" id="musicFab">🎵</div>
+  <div id="musicPlayer">
+    <div class="music-header">
+      <span>🎵 全网音乐搜索</span>
+      <button class="music-close"
+        onclick="document.getElementById('musicPlayer').classList.remove('show')">✕</button>
     </div>
+    <div class="search-box">
+      <input type="text" id="musicSearchInput" placeholder="输入歌名或歌手..."
+        onkeypress="if(event.key==='Enter') searchMusic()">
+      <button onclick="searchMusic()">搜索</button>
+    </div>
+    <div class="song-list" id="songList">
+      <div style="text-align:center;color:rgba(255,255,255,0.4);font-size:12px;padding:20px;">
+        输入歌名，回车搜索全网音乐
+      </div>
+    </div>
+    <div class="audio-controls">
+      <audio id="audioPlayer" controls></audio>
+    </div>
+  </div>
 </body>
 </html>
