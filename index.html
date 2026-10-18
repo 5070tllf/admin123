@@ -33,8 +33,15 @@
     let heartbeatTimer = null;
     let onlineUsers = []; 
 
-    // 敏感词库（你可以自行增加）
-    const BAD_WORDS = ["傻逼", "操你妈", "妈的", "去死", "煞笔", "脑残", "fuck", "shit"];
+    // 本地兜底违禁词库
+    let BAD_WORDS = ["傻逼", "操你妈", "妈的", "去死", "煞笔", "脑残", "fuck", "shit"];
+    // 尝试从网络拉取扩充词库
+    fetch('https://raw.githubusercontent.com/fwwdn/sensitive-stop-words/master/%E8%84%8F%E8%AF%9D.txt')
+      .then(res => res.text())
+      .then(text => {
+        const words = text.split('\n').map(w => w.trim()).filter(w => w);
+        if (words.length > 0) BAD_WORDS = [...new Set([...BAD_WORDS, ...words])];
+      }).catch(() => {});
 
     /* ==================== 设备码 ==================== */
     function getDeviceId() {
@@ -178,11 +185,10 @@
       checkAutoLogin();
       bindDeviceBanMonitor();
 
-      // 监听系统广播（包含全网更新公告）
       onValue(ref(db, 'system_broadcast'), (snap) => {
         if (snap.exists()) {
           const data = snap.val();
-          if (Date.now() - (data.time || 0) > 86400000) return; // 1天前的广播不再弹
+          if (Date.now() - (data.time || 0) > 86400000) return; 
           
           if (data.action === "delete_all_users" && !sessionStorage.getItem('alerted_delete_users')) {
             sessionStorage.setItem('alerted_delete_users', 'true');
@@ -194,7 +200,6 @@
           
           if (data.action === "global_announcement") {
             const lastRead = localStorage.getItem('last_announce_time');
-            // 如果本地记录的时间戳与数据库里的不一致，说明更新了
             if (lastRead !== String(data.time)) {
               alert(`📢 系统更新公告\n\n${data.text}\n\n(点击确定后不再提示)`);
               localStorage.setItem('last_announce_time', String(data.time));
@@ -397,7 +402,6 @@
       goLobby();
     };
 
-    // 群主清空聊天记录
     window.clearChatHistory = function () {
       if (!confirm("⚠️ 警告：确定要清空该群的全部聊天记录吗？\n（此操作不可恢复，且对所有成员生效）")) return;
       remove(ref(db, `groups/${currentGroupId}/messages`)).then(() => {
@@ -406,7 +410,6 @@
       });
     };
 
-    // 群主注销解散群聊
     window.destroyGroup = function () {
       if (!confirm("⚠️ 警告：确定要注销并解散该群聊吗？\n所有群成员将被强制踢出，且数据无法恢复！")) return;
       remove(ref(db, 'groups/' + currentGroupId));
@@ -504,7 +507,7 @@
         return alert("🚫 群主开启了全员禁言，你无法发言！");
       }
 
-      // 敏感词检测与违规上报
+      // 实时违禁词检测（无感上报）
       let hasBadWord = false;
       for (let w of BAD_WORDS) {
         if (text.toLowerCase().includes(w.toLowerCase())) {
@@ -513,7 +516,6 @@
         }
       }
       if (hasBadWord) {
-        // 给作者端记录一笔
         const violationRef = ref(db, 'violations/' + myName);
         get(violationRef).then(snap => {
           const currentCount = snap.exists() ? snap.val().count : 0;
@@ -591,11 +593,9 @@
           <div class="msg-text ${bubbleClass}" style="${bubbleStyle}">${text}</div>`;
       }
 
-      // 长按或右键撤回逻辑
       const iAmOwner = (myName === currentGroupInfo.creator);
       const iAmAdmin = (currentGroupInfo.admins && currentGroupInfo.admins.includes(myName));
       
-      // 权限：自己的消息（2分钟内），或群主/管理员（无时间限制），或作者
       let canRecall = false;
       if (!["📢 系统公告", "📢 系统提示", "👑 作者(隐身)"].includes(sender)) {
         if (isMe && (Date.now() - time <= 120000)) canRecall = true;
@@ -603,20 +603,28 @@
       }
 
       if (canRecall) {
-        let timer;
-        // 手机端长按触发
+        let touchTimer;
+        let isMoved = false;
         div.addEventListener('touchstart', (e) => {
-          timer = setTimeout(() => {
-            e.preventDefault();
-            if (confirm(`确定要撤回这条消息吗？`)) {
-              remove(ref(db, `groups/${currentGroupId}/messages/${msgId}`));
+          isMoved = false;
+          touchTimer = setTimeout(() => {
+            if (!isMoved) {
+              if (confirm(`确定要撤回这条消息吗？`)) {
+                remove(ref(db, `groups/${currentGroupId}/messages/${msgId}`));
+              }
             }
-          }, 600);
+          }, 800);
+        }, { passive: true });
+
+        div.addEventListener('touchmove', () => {
+          isMoved = true;
+          if (touchTimer) clearTimeout(touchTimer);
+        }, { passive: true });
+
+        div.addEventListener('touchend', () => {
+          if (touchTimer) clearTimeout(touchTimer);
         });
-        div.addEventListener('touchend', () => clearTimeout(timer));
-        div.addEventListener('touchmove', () => clearTimeout(timer));
-        
-        // 电脑端右键触发
+
         div.addEventListener('contextmenu', (e) => {
           e.preventDefault();
           if (confirm(`确定要撤回这条消息吗？`)) {
@@ -774,9 +782,100 @@
     window.copyGroupId = function () {
       navigator.clipboard.writeText(currentGroupId).then(() => alert("群号已复制！")).catch(() => {});
     };
+
+    /* ==================== 🎵 音乐播放器（恢复且修复） ==================== */
+    function initMusicPlayer() {
+      const musicFab = document.getElementById('musicFab');
+      const musicPlayer = document.getElementById('musicPlayer');
+      const closeBtn = musicPlayer.querySelector('.music-close');
+
+      musicFab.addEventListener('click', function (e) {
+        e.stopPropagation();
+        e.preventDefault();
+        musicPlayer.classList.toggle('show');
+      });
+
+      closeBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        musicPlayer.classList.remove('show');
+      });
+
+      const searchInput = document.getElementById('musicSearchInput');
+      searchInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          searchMusic();
+        }
+      });
+    }
+
+    window.searchMusic = async function () {
+      const queryInput = document.getElementById('musicSearchInput');
+      const query = queryInput.value.trim();
+      if (!query) return;
+
+      const listEl = document.getElementById('songList');
+      listEl.innerHTML = '<div style="text-align:center;color:rgba(255,255,255,0.4);font-size:12px;padding:20px;">搜索中...</div>';
+
+      try {
+        const res = await fetch(
+          `https://music-api.gdstudio.xyz/api.php?types=search&source=netease&name=${encodeURIComponent(query)}&count=15&pages=1`
+        );
+        const data = await res.json();
+        listEl.innerHTML = '';
+
+        if (data && data.length > 0) {
+          data.forEach(song => {
+            const div = document.createElement('div');
+            div.className = 'song-item';
+            div.innerHTML = `
+              ${song.name}
+              <br>
+              <span style="font-size:12px;color:rgba(255,255,255,0.5);">
+                ${Array.isArray(song.artist) ? song.artist.join(' / ') : (song.artist || '未知')}
+              </span>`;
+            div.onclick = () => playSong(song.id, div);
+            listEl.appendChild(div);
+          });
+        } else {
+          listEl.innerHTML = '<div style="text-align:center;color:rgba(255,255,255,0.4);font-size:12px;padding:20px;">没有找到相关歌曲</div>';
+        }
+      } catch (e) {
+        console.error(e);
+        listEl.innerHTML = '<div style="text-align:center;color:#ff3b30;font-size:12px;padding:20px;">搜索失败，请稍后再试</div>';
+      }
+    };
+
+    window.playSong = async function (songId, itemEl) {
+      document.querySelectorAll('.song-item').forEach(el => el.classList.remove('playing'));
+      itemEl.classList.add('playing');
+
+      const audio = document.getElementById('audioPlayer');
+      audio.src = '';
+
+      try {
+        const res = await fetch(
+          `https://music-api.gdstudio.xyz/api.php?types=url&source=netease&id=${songId}&br=320`
+        );
+        const data = await res.json();
+        if (data && data.url) {
+          audio.src = data.url;
+          audio.play().catch(err => {
+            console.warn('播放被阻止', err);
+            alert('播放被浏览器拦截，请再次点击播放按钮');
+          });
+        } else {
+          alert("该歌曲暂无版权或无法获取播放链接");
+        }
+      } catch (e) {
+        alert("获取播放链接失败");
+      }
+    };
+
+    document.addEventListener('DOMContentLoaded', initMusicPlayer);
   </script>
   <style>
-    /* 保持和上一版一样，无需改动 CSS */
+    /* 基础样式 */
     * { margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; -webkit-tap-highlight-color: transparent; }
     body { background: #000; color: #fff; height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; position: relative; }
     body::before { content: ''; position: fixed; top: -50vh; left: -50vw; width: 200vw; height: 200vh; background: radial-gradient(circle at 20% 30%, rgba(100,200,255,0.4) 0%, transparent 40%), radial-gradient(circle at 80% 70%, rgba(255,100,200,0.4) 0%, transparent 40%); animation: spin 20s linear infinite; filter: blur(40px); z-index: -1; }
