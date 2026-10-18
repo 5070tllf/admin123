@@ -398,7 +398,6 @@
       goLobby();
     };
 
-    // 群主注销群聊
     window.destroyGroup = function () {
       if (!confirm("⚠️ 警告：确定要注销并解散该群聊吗？\n所有群成员将被强制踢出，且数据无法恢复！")) return;
       remove(ref(db, 'groups/' + currentGroupId));
@@ -430,11 +429,25 @@
           currentGroupInfo = snap.val();
           document.getElementById('displayGroupName').innerText = currentGroupInfo.name || ("群 " + gid);
           
+          // 实时同步全员禁言横幅和输入框禁用状态
           const banner = document.getElementById('muteAllBanner');
-          if (currentGroupInfo.muteAll && !(myName === currentGroupInfo.creator || (currentGroupInfo.admins && currentGroupInfo.admins.includes(myName)) || isAuthor)) {
+          const isPrivileged = (myName === currentGroupInfo.creator) || (currentGroupInfo.admins && currentGroupInfo.admins.includes(myName)) || isAuthor;
+          
+          if (currentGroupInfo.muteAll && !isPrivileged) {
             banner.style.display = 'block';
+            document.getElementById('msgInput').placeholder = "全员禁言中，无法发送消息...";
+            document.getElementById('msgInput').disabled = true;
+            document.getElementById('sendBtn').style.opacity = '0.5';
           } else {
             banner.style.display = 'none';
+            document.getElementById('msgInput').placeholder = "输入消息...";
+            document.getElementById('msgInput').disabled = false;
+            document.getElementById('sendBtn').style.opacity = '1';
+          }
+
+          // 如果群设置弹窗开着，同步更新开关状态
+          if (document.getElementById('settingsModal').style.display === 'flex') {
+            document.getElementById('muteAllToggle').checked = !!currentGroupInfo.muteAll;
           }
         } else {
           if (currentGroupId === gid) {
@@ -478,7 +491,7 @@
       const text = input.value.trim();
       if (!text) return;
 
-      // 全员禁言拦截逻辑
+      // 二次校验全员禁言（防穿透）
       const isOwner = (myName === currentGroupInfo.creator);
       const isAdmin = currentGroupInfo.admins && currentGroupInfo.admins.includes(myName);
       if (currentGroupInfo.muteAll && !isOwner && !isAdmin && !isAuthor) {
@@ -683,7 +696,6 @@
       
       const iAmOwner = (myName === currentGroupInfo.creator);
       
-      // 控制全员禁言开关
       const switchBox = document.getElementById('muteAllSwitchBox');
       if (iAmOwner) {
         switchBox.style.display = 'flex';
@@ -692,7 +704,6 @@
         switchBox.style.display = 'none';
       }
       
-      // 控制注销群聊按钮
       const destroyBtn = document.getElementById('destroyGroupBtn');
       if (iAmOwner) {
         destroyBtn.style.display = 'block';
@@ -885,7 +896,7 @@
     document.addEventListener('DOMContentLoaded', initMusicPlayer);
   </script>
   <style>
-    /* 基础样式保持不变... */
+    /* 基础样式与之前保持一致，此处省略不重要的部分以节省篇幅，实际使用时保持原样 */
     * { margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; -webkit-tap-highlight-color: transparent; }
     body { background: #000; color: #fff; height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; position: relative; }
     body::before {
@@ -904,9 +915,10 @@
     .lobby-header > div { display: flex; align-items: center; gap: 15px; }
     .logout-btn { background: rgba(255,59,48,0.15); border: 1px solid rgba(255,59,48,0.3); color: #ff453a; font-size: 13px; font-weight: 600; cursor: pointer; padding: 6px 12px; border-radius: 10px; transition: 0.2s; }
     .lobby-btns { padding: 20px; display: flex; gap: 10px; flex-shrink: 0; }
-    .lobby-btns button { flex: 1; padding: 14px; border: 1px solid rgba(0,122,255,0.5); border-radius: 14px; font-weight: bold; font-size: 15px; cursor: pointer; background: rgba(0,122,255,0.2); color: #0a84ff; box-shadow: 0 8px 20px rgba(0,122,255,0.15); backdrop-filter: blur(10px); transition: 0.2s; }
-    .btn-join-box { display: flex; gap: 10px; padding: 0 20px 20px 20px; flex-shrink: 0; }
-    .btn-join-box input { flex: 1; padding: 14px; border: 1px solid rgba(255,255,255,0.1); border-radius: 14px; outline: none; font-size: 15px; background: rgba(0,0,0,0.3); color: #fff; }
+    .lobby-btns button { flex: 1; padding: 14px; border: 1px solid rgba(0,122,255,0.5); border-radius: 14px; font-weight: bold; font-size: 15px; cursor: pointer; background: rgba(0,122,255,0.2); color: #0a84ff; box-shadow: 0 8px 20px rgba(0,122,255,0.15); backdrop-filter: blur(10pxassword); transition: 0.2s; }
+    .btn-join">
+-box { display: flex; gap:      10px; padding: 0 20px 20px < 20px; flex-shrink: button0; }
+    .btn-join-box input class { flex: 1; padding: 14px; border: 1px solid rgba(255,255,255,0.1); border-radius: 14px; outline: none; font-size: 15px; background: rgba(0,0,0,0.3); color: #fff; }
     .btn-join-box button { padding: 0 20px; background: rgba(52,199,89,0.2); border: 1px solid rgba(52,199,89,0.5); color: #30d158; border-radius: 14px; font-weight: bold; box-shadow: 0 8px 20px rgba(52,199,89,0.15); backdrop-filter: blur(10px); transition: 0.2s; }
     .group-list { flex: 1; overflow-y: auto; padding: 10px 20px; -webkit-overflow-scrolling: touch; }
     .chat-item { display: flex; align-items: center; padding: 16px; margin-bottom: 12px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 18px; box-shadow: 0 10px 20px rgba(0,0,0,0.2); cursor: pointer; transition: 0.2s; backdrop-filter: blur(10px); }
@@ -966,8 +978,7 @@
     <div class="login-box">
       <h1>Chat</h1>
       <input type="text" id="username" placeholder="账号" autocomplete="username">
-      <input type="password" id="password" placeholder="密码" autocomplete="current-password">
-      <button class="btn-login" onclick="loginOrRegister()" style="width:100%;padding:16px;border:none;border-radius:14px;font-weight:bold;font-size:16px;margin-bottom:15px;">登录 / 注册</button>
+      <input type="password" id="password" placeholder="密码" autocomplete="current-p="btn-login" onclick="loginOrRegister()" style="width:100%;padding:16px;border:none;border-radius:14px;font-weight:bold;font-size:16px;margin-bottom:15px;">登录 / 注册</button>
       <button id="oneClickLoginBtn" class="btn-one-click" onclick="doOneClickLogin()" style="width:100%;padding:16px;border:none;border-radius:14px;font-weight:bold;font-size:16px;display:none;">一键登录</button>
     </div>
   </div>
@@ -997,6 +1008,7 @@
       <button class="settings-btn" onclick="openGroupSettings()">⚙️</button>
     </div>
     
+    <!-- 全员禁言提示横幅 -->
     <div id="muteAllBanner" style="display:none; background:linear-gradient(90deg, rgba(255,59,48,0.8), rgba(255,0,127,0.8)); color:#fff; text-align:center; padding:8px; font-size:13px; font-weight:bold; text-shadow:0 1px 2px rgba(0,0,0,0.5); flex-shrink:0;">
       ⚠️ 群主开启了全员禁言，仅群主、管理员和作者可发言
     </div>
@@ -1004,7 +1016,7 @@
     <div class="chat-content" id="chatContent"></div>
     <div class="input-area">
       <input type="text" id="msgInput" placeholder="输入消息..." onkeypress="handleEnter(event)">
-      <button onclick="sendMsg()">发送</button>
+      <button id="sendBtn" onclick="sendMsg()">发送</button>
     </div>
   </div>
 
@@ -1022,6 +1034,7 @@
     <div class="modal-box">
       <h3>群聊设置</h3>
       
+      <!-- 全员禁言开关 -->
       <div id="muteAllSwitchBox" style="display:none; align-items:center; justify-content:space-between; background:rgba(255,59,48,0.1); padding:12px; border-radius:14px; border:1px solid rgba(255,59,48,0.3); margin-bottom:15px;">
         <div style="font-size:14px; font-weight:bold; color:#ff453a;">🚫 全员禁言</div>
         <input type="checkbox" id="muteAllToggle" onchange="toggleMuteAll(event)" style="width:20px; height:20px; accent-color:#ff3b30; cursor:pointer;">
