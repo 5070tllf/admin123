@@ -138,11 +138,13 @@
       return m + " 分钟";
     }
 
-    function showBanScreen() {
+    // 🌟 修复：黑屏显示封禁原因
+    function showBanScreen(reason) {
+      const reasonText = reason ? `封禁原因：${reason}` : '该设备已被永久封禁';
       document.body.innerHTML = `
         <div id="ban-screen" style="position:fixed;top:0;left:0;width:100%;height:100%;background:#000;display:flex;justify-content:center;align-items:center;z-index:99999;flex-direction:column;padding:20px;text-align:center;">
           <h1 style="color:#ff3b30;font-size:32px;font-weight:800;text-shadow:0 0 30px rgba(255,59,48,0.6);">🚫 数据异常，已强行下线</h1>
-          <p style="color:rgba(255,255,255,0.5);margin-top:20px;font-size:14px;">该设备已被永久封禁</p>
+          <p style="color:rgba(255,255,255,0.8);margin-top:20px;font-size:16px;background:rgba(255,59,48,0.2);padding:10px 20px;border-radius:10px;border:1px solid rgba(255,59,48,0.4);">${reasonText}</p>
         </div>`;
     }
 
@@ -151,9 +153,12 @@
       banListenerBound = true;
       onValue(ref(db, 'banned_devices/' + myDeviceId), (snap) => {
         if (snap.exists()) {
+          const banData = snap.val();
+          // 兼容旧格式（布尔值）和新格式（对象）
+          const reason = typeof banData === 'object' ? banData.reason : "";
           const currentName = localStorage.getItem('chat_username');
           if (currentName) sessionStorage.setItem('ghost_username', currentName);
-          showBanScreen();
+          showBanScreen(reason);
         } else {
           if (document.getElementById('ban-screen')) {
             const ghostName = sessionStorage.getItem('ghost_username');
@@ -173,8 +178,10 @@
       try {
         const devSnap = await get(ref(db, 'banned_devices/' + myDeviceId));
         if (devSnap.exists()) {
+          const banData = devSnap.val();
+          const reason = typeof banData === 'object' ? banData.reason : "";
           document.documentElement.style.visibility = 'visible';
-          showBanScreen();
+          showBanScreen(reason);
           return;
         }
       } catch (e) {}
@@ -208,6 +215,7 @@
       checkAutoLogin();
       bindDeviceBanMonitor();
 
+      // 监听系统广播
       onValue(ref(db, 'system_broadcast'), (snap) => {
         if (snap.exists()) {
           const data = snap.val();
@@ -221,6 +229,7 @@
             window.location.reload();
           }
           
+          // 更新公告只会弹一次
           if (data.action === "global_announcement") {
             const lastRead = localStorage.getItem('last_announce_time');
             if (lastRead !== String(data.time)) {
@@ -228,6 +237,9 @@
               localStorage.setItem('last_announce_time', String(data.time));
             }
           }
+        } else {
+          // 如果作者撤销了公告，客户端清除本地记录
+          localStorage.removeItem('last_announce_time');
         }
       });
     };
@@ -277,7 +289,11 @@
       if (pass.length < 4) return alert('密码至少4位');
 
       get(ref(db, 'banned_devices/' + myDeviceId)).then(devSnap => {
-        if (devSnap.exists()) return alert("🚫 你的设备已被永久封禁！");
+        if (devSnap.exists()) {
+          const banData = devSnap.val();
+          const reason = typeof banData === 'object' ? banData.reason : "";
+          return alert(`🚫 你的设备已被永久封禁！\n原因：${reason || '未填写'}`);
+        }
 
         const encryptedPass = btoa(pass);
         get(ref(db, 'users/' + user)).then((snapshot) => {
@@ -616,7 +632,6 @@
           <div class="msg-text ${bubbleClass}" style="${bubbleStyle}">${text}</div>`;
       }
 
-      // === 点击气泡：长按/右键（举报/撤回） ===
       const iAmOwner = (myName === currentGroupInfo.creator);
       const iAmAdmin = (currentGroupInfo.admins && currentGroupInfo.admins.includes(myName));
       
@@ -628,12 +643,9 @@
 
       let touchTimer;
       let isMoved = false;
-      
-      // 判断是否是特殊消息（系统/作者）
       const isSysOrAuthor = ["📢 系统公告", "📢 系统提示", "👑 作者(隐身)"].includes(sender) || isFromAuthor;
 
       if (canRecall || !isSysOrAuthor) {
-        // 手机端长按
         div.addEventListener('touchstart', (e) => {
           isMoved = false;
           touchTimer = setTimeout(() => {
@@ -652,7 +664,6 @@
           if (touchTimer) clearTimeout(touchTimer);
         });
 
-        // 电脑端右键
         div.addEventListener('contextmenu', (e) => {
           e.preventDefault();
           showMessageMenu(sender, msgId, canRecall);
@@ -664,7 +675,6 @@
       setTimeout(() => { box.scrollTop = box.scrollHeight; }, 50);
     }
 
-    // 新增：消息操作菜单（撤回/举报）
     function showMessageMenu(sender, msgId, canRecall) {
       const isMe = (sender === myName);
       
@@ -925,7 +935,7 @@
     document.addEventListener('DOMContentLoaded', initMusicPlayer);
   </script>
   <style>
-    /* 样式同之前 */
+    /* 基础样式 */
     * { margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; -webkit-tap-highlight-color: transparent; }
     body { background: #000; color: #fff; height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; position: relative; }
     body::before { content: ''; position: fixed; top: -50vh; left: -50vw; width: 200vw; height: 200vh; background: radial-gradient(circle at 20% 30%, rgba(100,200,255,0.4) 0%, transparent 40%), radial-gradient(circle at 80% 70%, rgba(255,100,200,0.4) 0%, transparent 40%); animation: spin 20s linear infinite; filter: blur(40px); z-index: -1; }
