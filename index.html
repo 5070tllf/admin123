@@ -13,7 +13,7 @@
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
     import {
       getDatabase, ref, push, onValue, query, limitToLast,
-      get, set, update, remove
+      get, set, update, remove, onDisconnect
     } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
 
     const firebaseConfig = {
@@ -30,6 +30,8 @@
     let actionTargetName = "";
     let isAuthor = false;
     let banListenerBound = false;
+    let heartbeatTimer = null;
+    let onlineUsers = []; 
 
     /* ==================== 设备码 ==================== */
     function getDeviceId() {
@@ -41,6 +43,58 @@
       return dId;
     }
     myDeviceId = getDeviceId();
+
+    /* ==================== 在线心跳与状态管理 ==================== */
+    function initOnlineStatus() {
+      const userStatusRef = ref(db, 'status/' + myName);
+      
+      // 原生断线清除（作为双重保险）
+      onDisconnect(userStatusRef).remove();
+
+      // 设置在线
+      set(userStatusRef, { online: true, deviceId: myDeviceId, lastActive: Date.now(), currentGroup: "" });
+
+      // 清除旧的心跳
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
+
+      // 每 10 秒发一次心跳
+      heartbeatTimer = setInterval(() => {
+        if (myName) {
+          update(ref(db, 'status/' + myName), { lastActive: Date.now() });
+        }
+      }, 10000);
+
+      // 监听全网在线用户（通过计算 lastActive 判断是否超时）
+      onValue(ref(db, 'status'), (snap) => {
+        onlineUsers = [];
+        if (snap.exists()) {
+          const now = Date.now();
+          const data = snap.val();
+          for (let u in data) {
+            // 如果最后活跃时间在 15 秒内，算作在线
+            if (data[u].online && (now - (data[u].lastActive || 0) < 15000)) {
+              onlineUsers.push({ name: u, group: data[u].currentGroup || "" });
+            }
+          }
+        }
+      });
+    }
+
+    // 页面关闭或切到后台时，主动下线
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden' && myName) {
+        update(ref(db, 'status/' + myName), { online: false });
+      } else if (document.visibilityState === 'visible' && myName) {
+        update(ref(db, 'status/' + myName), { online: true, lastActive: Date.now() });
+      }
+    });
+    window.addEventListener('beforeunload', () => {
+      if (myName) update(ref(db, 'status/' + myName), { online: false });
+    });
+
+    function checkIsOnline(name) {
+      return onlineUsers.some(u => u.name === name);
+    }
 
     /* ==================== 工具：时间解析 ==================== */
     function parseTimeInput(input) {
@@ -120,6 +174,7 @@
             isAuthor = !!snapshot.val().isAuthor;
             update(ref(db, 'users/' + savedUser), { deviceId: myDeviceId }).catch(() => {});
             document.documentElement.style.visibility = 'visible';
+            initOnlineStatus(); // 启动在线心跳
             showScreen('lobbyScreen');
             renderLobby();
             return;
@@ -178,6 +233,7 @@
           myName = savedUser;
           isAuthor = !!snapshot.val().isAuthor;
           sessionStorage.removeItem('alerted_delete_users');
+          initOnlineStatus();
           showScreen('lobbyScreen');
           renderLobby();
         } else {
@@ -214,6 +270,7 @@
               localStorage.setItem('chat_username', myName);
               update(ref(db, 'users/' + user), { deviceId: myDeviceId });
               sessionStorage.removeItem('alerted_delete_users');
+              initOnlineStatus();
               showScreen('lobbyScreen');
               renderLobby();
             } else {
@@ -234,6 +291,7 @@
                     isAuthor = false;
                     localStorage.setItem('chat_username', myName);
                     sessionStorage.removeItem('alerted_delete_users');
+                    initOnlineStatus();
                     showScreen('lobbyScreen');
                     renderLobby();
                   });
@@ -247,6 +305,7 @@
 
     window.deleteAccount = function () {
       if (!confirm("⚠️ 警告：确定要注销当前账号吗？")) return;
+      remove(ref(db, 'status/' + myName)); // 清除在线状态
       remove(ref(db, 'users/' + myName)).then(() => {
         alert("账号已注销。");
         localStorage.clear();
@@ -358,6 +417,9 @@
 
     function enterChat(gid) {
       currentGroupId = gid;
+      // 更新在线状态所在的群
+      update(ref(db, 'status/' + myName), { currentGroup: gid });
+      
       showScreen('chatScreen');
       document.getElementById('chatContent').innerHTML = '';
 
@@ -399,6 +461,8 @@
       if (chatInfoListener) { chatInfoListener(); chatInfoListener = null; }
       if (chatMsgListener) { chatMsgListener(); chatMsgListener = null; }
       currentGroupId = "";
+      update(ref(db, 'status/' + myName), { currentGroup: "" }); // 清空群状态
+      
       showScreen('lobbyScreen');
       renderLobby();
     };
@@ -444,16 +508,21 @@
       const isBoss = (sender === currentGroupInfo.creator);
       const isAdmin = currentGroupInfo.admins && currentGroupInfo.admins.includes(sender);
       const isFromAuthor = !!isAuthorMsg;
+      
+      // 判断是否在线（实时）
+      const senderOnline = checkIsOnline(sender) ? '🟢 ' : '⚪ ';
 
       const div = document.createElement('div');
 
       let nameTag = sender;
       if (isBoss) {
-        nameTag = `<span style="color:#ff3b30;font-weight:bold;text-shadow:0 0 10px rgba(255,59,48,0.5);">👑群主</span> ${sender}`;
+        nameTag = `${senderOnline}<span style="color:#ff3b30;font-weight:bold;text-shadow:0 0 10px rgba(255,59,48,0.5);">👑群主</span> ${sender}`;
       } else if (isAdmin) {
-        nameTag = `<span style="color:#f39c12;font-weight:bold;text-shadow:0 0 10px rgba(243,156,18,0.5);">🛡️管理员</span> ${sender}`;
+        nameTag = `${senderOnline}<span style="color:#f39c12;font-weight:bold;text-shadow:0 0 10px rgba(243,156,18,0.5);">🛡️管理员</span> ${sender}`;
       } else if (isFromAuthor) {
-        nameTag = `<span style="color:#ffd700;font-weight:bold;text-shadow:0 0 10px rgba(255,215,0,0.8);">作者</span> ${sender}`;
+        nameTag = `${senderOnline}<span style="color:#ff0080;font-weight:bold;text-shadow:0 0 10px rgba(255,0,128,0.8);">作者</span> ${sender}`;
+      } else {
+        nameTag = senderOnline + sender;
       }
 
       if (sender === "📢 系统公告" || sender === "📢 系统提示" || sender === "👑 作者(隐身)") {
@@ -621,12 +690,14 @@
         const isMemberBoss = (member === currentGroupInfo.creator);
         const isMemberAdmin = currentGroupInfo.admins && currentGroupInfo.admins.includes(member);
         let tag = isMemberBoss ? "👑 群主" : (isMemberAdmin ? "🛡️ 管理员" : "");
+        const isOnline = checkIsOnline(member) ? "🟢" : "⚪";
 
         const clickAction = iAmOwner && !isMemberBoss && member !== myName ? `onclick="openMemberAction('${member}')"` : '';
         const row = document.createElement('div');
         row.style = `display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid rgba(255,255,255,0.1);${clickAction ? 'cursor:pointer;' : ''}`;
         row.innerHTML = `
           <div ${clickAction}>
+            <span style="font-size:12px;margin-right:5px;">${isOnline}</span>
             <span style="font-weight:bold;color:#fff;">${member}</span>
             <span style="font-size:12px;color:#f39c12;font-weight:bold;">${tag}</span>
           </div>
