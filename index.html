@@ -138,13 +138,23 @@
       return m + " 分钟";
     }
 
-    // 🌟 修复：黑屏显示封禁原因
-    function showBanScreen(reason) {
-      const reasonText = reason ? `封禁原因：${reason}` : '该设备已被永久封禁';
+    // 🌟 修复：兼容布尔值和对象，并醒目显示原因
+    function showBanScreen(banData) {
+      let reasonText = "该设备已被永久封禁";
+      
+      // 如果是对象且包含 reason，就显示 reason
+      if (banData && typeof banData === 'object' && banData.reason) {
+        reasonText = banData.reason;
+      }
+
       document.body.innerHTML = `
         <div id="ban-screen" style="position:fixed;top:0;left:0;width:100%;height:100%;background:#000;display:flex;justify-content:center;align-items:center;z-index:99999;flex-direction:column;padding:20px;text-align:center;">
           <h1 style="color:#ff3b30;font-size:32px;font-weight:800;text-shadow:0 0 30px rgba(255,59,48,0.6);">🚫 数据异常，已强行下线</h1>
-          <p style="color:rgba(255,255,255,0.8);margin-top:20px;font-size:16px;background:rgba(255,59,48,0.2);padding:10px 20px;border-radius:10px;border:1px solid rgba(255,59,48,0.4);">${reasonText}</p>
+          <div style="margin-top:20px; background:rgba(255,59,48,0.15); padding:15px 25px; border-radius:12px; border:1px solid rgba(255,59,48,0.4); max-width:80%;">
+            <p style="color:rgba(255,255,255,0.6); font-size:12px; margin-bottom:5px;">封禁原因</p>
+            <p style="color:#ff453a; font-size:18px; font-weight:bold; line-height:1.4;">${reasonText}</p>
+          </div>
+          <p style="color:rgba(255,255,255,0.3); margin-top:30px; font-size:12px;">如需申诉，请联系作者</p>
         </div>`;
     }
 
@@ -154,11 +164,9 @@
       onValue(ref(db, 'banned_devices/' + myDeviceId), (snap) => {
         if (snap.exists()) {
           const banData = snap.val();
-          // 兼容旧格式（布尔值）和新格式（对象）
-          const reason = typeof banData === 'object' ? banData.reason : "";
           const currentName = localStorage.getItem('chat_username');
           if (currentName) sessionStorage.setItem('ghost_username', currentName);
-          showBanScreen(reason);
+          showBanScreen(banData); // 把整个数据传进去
         } else {
           if (document.getElementById('ban-screen')) {
             const ghostName = sessionStorage.getItem('ghost_username');
@@ -179,9 +187,8 @@
         const devSnap = await get(ref(db, 'banned_devices/' + myDeviceId));
         if (devSnap.exists()) {
           const banData = devSnap.val();
-          const reason = typeof banData === 'object' ? banData.reason : "";
           document.documentElement.style.visibility = 'visible';
-          showBanScreen(reason);
+          showBanScreen(banData);
           return;
         }
       } catch (e) {}
@@ -215,7 +222,6 @@
       checkAutoLogin();
       bindDeviceBanMonitor();
 
-      // 监听系统广播
       onValue(ref(db, 'system_broadcast'), (snap) => {
         if (snap.exists()) {
           const data = snap.val();
@@ -229,7 +235,6 @@
             window.location.reload();
           }
           
-          // 更新公告只会弹一次
           if (data.action === "global_announcement") {
             const lastRead = localStorage.getItem('last_announce_time');
             if (lastRead !== String(data.time)) {
@@ -238,7 +243,6 @@
             }
           }
         } else {
-          // 如果作者撤销了公告，客户端清除本地记录
           localStorage.removeItem('last_announce_time');
         }
       });
@@ -291,8 +295,9 @@
       get(ref(db, 'banned_devices/' + myDeviceId)).then(devSnap => {
         if (devSnap.exists()) {
           const banData = devSnap.val();
-          const reason = typeof banData === 'object' ? banData.reason : "";
-          return alert(`🚫 你的设备已被永久封禁！\n原因：${reason || '未填写'}`);
+          let reasonText = "未填写";
+          if (typeof banData === 'object' && banData.reason) reasonText = banData.reason;
+          return alert(`🚫 你的设备已被永久封禁！\n原因：${reasonText}`);
         }
 
         const encryptedPass = btoa(pass);
