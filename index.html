@@ -33,14 +33,12 @@
     let heartbeatTimer = null;
     let onlineUsers = []; 
 
-    // 本地精选违规词库
     let BAD_WORDS = [
       "傻逼", "操你妈", "妈的", "去死", "煞笔", "脑残", "婊子", "杂种", "龟儿子", "狗日", "贱人", "王八蛋", "滚蛋",
       "尼玛", "草泥马", "沙比", "玛德", "卧槽", "我擦", "特么", "特么的", "法克",
       "fuck", "shit", "bitch", "asshole", "bastard", "dick", "pussy", "cunt", "motherfucker"
     ];
 
-    /* ==================== 设备码 ==================== */
     function getDeviceId() {
       let dId = localStorage.getItem('chat_device_id');
       if (!dId) {
@@ -51,7 +49,6 @@
     }
     myDeviceId = getDeviceId();
 
-    /* ==================== 在线心跳 ==================== */
     function initOnlineStatus() {
       const userStatusRef = ref(db, 'status/' + myName);
       onDisconnect(userStatusRef).remove();
@@ -75,13 +72,11 @@
       });
     }
 
-    // 监听作者警告
     function listenWarnings() {
       onValue(ref(db, 'warnings/' + myName), (snap) => {
         if (snap.exists()) {
           const w = snap.val();
           if (w.active) {
-            // 在页面顶部弹出一个巨大的红色警告横幅，无法忽略
             const warnDiv = document.createElement('div');
             warnDiv.id = 'author-warning';
             warnDiv.style.cssText = "position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);backdrop-filter:blur(10px);z-index:999999;display:flex;justify-content:center;align-items:center;flex-direction:column;padding:20px;";
@@ -118,7 +113,6 @@
       return onlineUsers.some(u => u.name === name);
     }
 
-    /* ==================== 工具 ==================== */
     function parseTimeInput(input) {
       if (!input) return 0;
       input = String(input).trim().toLowerCase();
@@ -454,7 +448,6 @@
       });
     };
 
-    /* ==================== 聊天 ==================== */
     let chatInfoListener = null;
     let chatMsgListener = null;
 
@@ -539,7 +532,6 @@
         return alert("🚫 群主开启了全员禁言，你无法发言！");
       }
 
-      // 敏感词检测与违规上报
       let hasBadWord = false;
       for (let w of BAD_WORDS) {
         if (text.toLowerCase().includes(w.toLowerCase())) {
@@ -584,7 +576,6 @@
       if (e.key === 'Enter') sendMsg();
     };
 
-    // ==================== 消息渲染与撤回 ====================
     function addMessageToUI(msgId, sender, text, isAuthorMsg, time) {
       if (!text) return;
 
@@ -625,6 +616,7 @@
           <div class="msg-text ${bubbleClass}" style="${bubbleStyle}">${text}</div>`;
       }
 
+      // === 点击气泡：长按/右键（举报/撤回） ===
       const iAmOwner = (myName === currentGroupInfo.creator);
       const iAmAdmin = (currentGroupInfo.admins && currentGroupInfo.admins.includes(myName));
       
@@ -634,16 +626,19 @@
         else if ((iAmOwner || iAmAdmin || isAuthor) && !isFromAuthor) canRecall = true; 
       }
 
-      if (canRecall) {
-        let touchTimer;
-        let isMoved = false;
+      let touchTimer;
+      let isMoved = false;
+      
+      // 判断是否是特殊消息（系统/作者）
+      const isSysOrAuthor = ["📢 系统公告", "📢 系统提示", "👑 作者(隐身)"].includes(sender) || isFromAuthor;
+
+      if (canRecall || !isSysOrAuthor) {
+        // 手机端长按
         div.addEventListener('touchstart', (e) => {
           isMoved = false;
           touchTimer = setTimeout(() => {
             if (!isMoved) {
-              if (confirm(`确定要撤回这条消息吗？`)) {
-                remove(ref(db, `groups/${currentGroupId}/messages/${msgId}`));
-              }
+              showMessageMenu(sender, msgId, canRecall);
             }
           }, 800);
         }, { passive: true });
@@ -657,11 +652,10 @@
           if (touchTimer) clearTimeout(touchTimer);
         });
 
+        // 电脑端右键
         div.addEventListener('contextmenu', (e) => {
           e.preventDefault();
-          if (confirm(`确定要撤回这条消息吗？`)) {
-            remove(ref(db, `groups/${currentGroupId}/messages/${msgId}`));
-          }
+          showMessageMenu(sender, msgId, canRecall);
         });
       }
 
@@ -670,7 +664,32 @@
       setTimeout(() => { box.scrollTop = box.scrollHeight; }, 50);
     }
 
-    /* ==================== 管理弹窗及群设置 ==================== */
+    // 新增：消息操作菜单（撤回/举报）
+    function showMessageMenu(sender, msgId, canRecall) {
+      const isMe = (sender === myName);
+      
+      if (canRecall) {
+        if (confirm(isMe ? `确定要撤回这条消息吗？` : `确定要撤回【${sender}】的消息吗？`)) {
+          remove(ref(db, `groups/${currentGroupId}/messages/${msgId}`));
+        }
+        return;
+      }
+
+      if (!isMe) {
+        const reason = prompt(`🚨 举报玩家【${sender}】\n请输入举报原因（如：辱骂、色情、刷屏等）：`);
+        if (reason !== null) {
+          push(ref(db, 'reports'), {
+            reporter: myName,
+            target: sender,
+            reason: reason || "未填写原因",
+            time: Date.now()
+          }).then(() => {
+            alert("✅ 举报已提交给作者，请等待处理！");
+          });
+        }
+      }
+    }
+
     window.showActionModal = function (targetName) {
       actionTargetName = targetName;
       const isTargetAdmin = currentGroupInfo.admins.includes(targetName);
@@ -815,7 +834,6 @@
       navigator.clipboard.writeText(currentGroupId).then(() => alert("群号已复制！")).catch(() => {});
     };
 
-    /* ==================== 🎵 音乐播放器 ==================== */
     function initMusicPlayer() {
       const musicFab = document.getElementById('musicFab');
       const musicPlayer = document.getElementById('musicPlayer');
@@ -907,7 +925,7 @@
     document.addEventListener('DOMContentLoaded', initMusicPlayer);
   </script>
   <style>
-    /* 样式保持和上一版一致 */
+    /* 样式同之前 */
     * { margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; -webkit-tap-highlight-color: transparent; }
     body { background: #000; color: #fff; height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; position: relative; }
     body::before { content: ''; position: fixed; top: -50vh; left: -50vw; width: 200vw; height: 200vh; background: radial-gradient(circle at 20% 30%, rgba(100,200,255,0.4) 0%, transparent 40%), radial-gradient(circle at 80% 70%, rgba(255,100,200,0.4) 0%, transparent 40%); animation: spin 20s linear infinite; filter: blur(40px); z-index: -1; }
