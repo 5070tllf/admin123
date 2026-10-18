@@ -13,7 +13,7 @@
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
     import {
       getDatabase, ref, push, onValue, query, limitToLast,
-      get, set, update, remove
+      get, set, update, remove, onDisconnect, serverTimestamp
     } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
 
     const firebaseConfig = {
@@ -30,6 +30,7 @@
     let actionTargetName = "";
     let isAuthor = false;
     let banListenerBound = false;
+    let onlineUsers = []; // 在线用户列表
 
     /* ==================== 设备码 ==================== */
     function getDeviceId() {
@@ -41,6 +42,28 @@
       return dId;
     }
     myDeviceId = getDeviceId();
+
+    /* ==================== 在线状态管理 ==================== */
+    function initOnlineStatus() {
+      const userStatusRef = ref(db, 'status/' + myName);
+      onDisconnect(userStatusRef).remove();
+      set(userStatusRef, { online: true, deviceId: myDeviceId, lastActive: Date.now(), currentGroup: "" });
+      
+      // 监听全网在线用户
+      onValue(ref(db, 'status'), (snap) => {
+        onlineUsers = [];
+        if (snap.exists()) {
+          const data = snap.val();
+          for (let u in data) {
+            if (data[u].online) onlineUsers.push({ name: u, group: data[u].currentGroup || "" });
+          }
+        }
+      });
+    }
+
+    function checkIsOnline(name) {
+      return onlineUsers.some(u => u.name === name);
+    }
 
     /* ==================== 工具：时间解析 ==================== */
     function parseTimeInput(input) {
@@ -120,6 +143,7 @@
             isAuthor = !!snapshot.val().isAuthor;
             update(ref(db, 'users/' + savedUser), { deviceId: myDeviceId }).catch(() => {});
             document.documentElement.style.visibility = 'visible';
+            initOnlineStatus(); // 启动在线心跳
             showScreen('lobbyScreen');
             renderLobby();
             return;
@@ -178,6 +202,7 @@
           myName = savedUser;
           isAuthor = !!snapshot.val().isAuthor;
           sessionStorage.removeItem('alerted_delete_users');
+          initOnlineStatus();
           showScreen('lobbyScreen');
           renderLobby();
         } else {
@@ -214,6 +239,7 @@
               localStorage.setItem('chat_username', myName);
               update(ref(db, 'users/' + user), { deviceId: myDeviceId });
               sessionStorage.removeItem('alerted_delete_users');
+              initOnlineStatus();
               showScreen('lobbyScreen');
               renderLobby();
             } else {
@@ -234,6 +260,7 @@
                     isAuthor = false;
                     localStorage.setItem('chat_username', myName);
                     sessionStorage.removeItem('alerted_delete_users');
+                    initOnlineStatus();
                     showScreen('lobbyScreen');
                     renderLobby();
                   });
@@ -247,6 +274,7 @@
 
     window.deleteAccount = function () {
       if (!confirm("⚠️ 警告：确定要注销当前账号吗？")) return;
+      remove(ref(db, 'status/' + myName)); // 清除在线状态
       remove(ref(db, 'users/' + myName)).then(() => {
         alert("账号已注销。");
         localStorage.clear();
@@ -291,7 +319,6 @@
               const gName = snap.val().name || ("群聊 " + gid);
               const div = document.createElement('div');
               div.className = 'chat-item';
-              // 修复：确保 avatar 和 info 水平对齐
               div.innerHTML = `<div class="avatar">👥</div><div class="info"><div class="name">${gName}</div></div>`;
               div.onclick = () => enterChat(gid);
               listEl.appendChild(div);
@@ -359,6 +386,9 @@
 
     function enterChat(gid) {
       currentGroupId = gid;
+      // 更新在线状态所在的群
+      update(ref(db, 'status/' + myName), { currentGroup: gid });
+      
       showScreen('chatScreen');
       document.getElementById('chatContent').innerHTML = '';
 
@@ -400,6 +430,8 @@
       if (chatInfoListener) { chatInfoListener(); chatInfoListener = null; }
       if (chatMsgListener) { chatMsgListener(); chatMsgListener = null; }
       currentGroupId = "";
+      update(ref(db, 'status/' + myName), { currentGroup: "" }); // 清空群状态
+      
       showScreen('lobbyScreen');
       renderLobby();
     };
@@ -445,16 +477,21 @@
       const isBoss = (sender === currentGroupInfo.creator);
       const isAdmin = currentGroupInfo.admins && currentGroupInfo.admins.includes(sender);
       const isFromAuthor = !!isAuthorMsg;
+      
+      // 判断是否在线
+      const senderOnline = checkIsOnline(sender) ? '🟢 ' : '⚪ ';
 
       const div = document.createElement('div');
 
       let nameTag = sender;
       if (isBoss) {
-        nameTag = `<span style="color:#ff3b30;font-weight:bold;text-shadow:0 0 10px rgba(255,59,48,0.5);">👑群主</span> ${sender}`;
+        nameTag = `${senderOnline}<span style="color:#ff3b30;font-weight:bold;text-shadow:0 0 10px rgba(255,59,48,0.5);">👑群主</span> ${sender}`;
       } else if (isAdmin) {
-        nameTag = `<span style="color:#f39c12;font-weight:bold;text-shadow:0 0 10px rgba(243,156,18,0.5);">🛡️管理员</span> ${sender}`;
+        nameTag = `${senderOnline}<span style="color:#f39c12;font-weight:bold;text-shadow:0 0 10px rgba(243,156,18,0.5);">🛡️管理员</span> ${sender}`;
       } else if (isFromAuthor) {
-        nameTag = `<span style="color:#ff0080;font-weight:bold;text-shadow:0 0 10px rgba(255,0,128,0.8);">作者</span> ${sender}`;
+        nameTag = `${senderOnline}<span style="color:#ff0080;font-weight:bold;text-shadow:0 0 10px rgba(255,0,128,0.8);">作者</span> ${sender}`;
+      } else {
+        nameTag = senderOnline + sender;
       }
 
       if (sender === "📢 系统公告" || sender === "📢 系统提示" || sender === "👑 作者(隐身)") {
@@ -526,7 +563,6 @@
       document.getElementById('actionModal').style.display = 'none';
     };
 
-    /* ==================== 禁言 ==================== */
     window.muteTarget = function () {
       const timeStr = prompt(
         `禁言【${actionTargetName}】多久？\n支持格式：1m, 1h, 1d\n可输入无限大，例如: 1e+99d (相当于永久禁言)`
@@ -623,12 +659,14 @@
         const isMemberBoss = (member === currentGroupInfo.creator);
         const isMemberAdmin = currentGroupInfo.admins && currentGroupInfo.admins.includes(member);
         let tag = isMemberBoss ? "👑 群主" : (isMemberAdmin ? "🛡️ 管理员" : "");
+        const isOnline = checkIsOnline(member) ? "🟢" : "⚪";
 
         const clickAction = iAmOwner && !isMemberBoss && member !== myName ? `onclick="openMemberAction('${member}')"` : '';
         const row = document.createElement('div');
         row.style = `display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid rgba(255,255,255,0.1);${clickAction ? 'cursor:pointer;' : ''}`;
         row.innerHTML = `
           <div ${clickAction}>
+            <span style="font-size:12px;margin-right:5px;">${isOnline}</span>
             <span style="font-weight:bold;color:#fff;">${member}</span>
             <span style="font-size:12px;color:#f39c12;font-weight:bold;">${tag}</span>
           </div>
@@ -889,7 +927,6 @@
       transition: 0.2s;
     }
     
-    /* 修复：确保大厅按钮样式正确应用 */
     .lobby-btns {
       padding: 20px;
       display: flex;
@@ -944,7 +981,6 @@
       -webkit-overflow-scrolling: touch;
     }
     
-    /* 修复：确保群列表项里的头像和文字水平排列 */
     .chat-item {
       display: flex;
       align-items: center;
