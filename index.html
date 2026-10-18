@@ -34,37 +34,28 @@
         }
         myDeviceId = getDeviceId();
 
-        // 🌟 核心修复：统一文本检测，精准捕获解封瞬间
+        // 封禁拦截雷达
         function monitorDeviceBan() {
             onValue(ref(db, 'banned_devices/' + myDeviceId), (snap) => {
                 if (snap.exists()) {
-                    // 1. 瞬间封禁
                     const currentName = localStorage.getItem('chat_username');
                     if (currentName) sessionStorage.setItem('ghost_username', currentName);
                     
                     document.body.innerHTML = `
-                        <div id="ban-screen" style="height:100vh; display:flex; flex-direction:column; justify-content:center; align-items:center; background:#050505; padding:20px; text-align:center; z-index:99999; position:fixed; top:0; left:0; width:100%;">
-                            <h1 style="color:#ff3b30; font-size:32px; margin-bottom:20px;">🚫 数据异常，已强行下线</h1>
-                            <p style="color:#aaa; font-size:16px;">管理员已永久禁止该设备访问本站。</p>
-                            <p style="color:#888; font-size:14px; margin-top:10px;">哪怕您更换账号或重新注册，也无法进入。</p>
+                        <div id="ban-screen" style="height:100vh; display:flex; flex-direction:column; justify-content:center; align-items:center; background:#000; padding:20px; text-align:center; z-index:99999; position:fixed; top:0; left:0; width:100%;">
+                            <h1 style="color:#ff3b30; font-size:32px; margin-bottom:20px; font-weight:800; letter-spacing:-1px; text-shadow: 0 0 20px rgba(255,59,48,0.5);">🚫 数据异常，已强行下线</h1>
+                            <p style="color:#8e8e93; font-size:16px;">管理员已永久禁止该设备访问本站。</p>
                         </div>
                     `;
-                    
-                    // 封禁时：只删账号，保留设备码和群聊记录
                     localStorage.removeItem('chat_username');
                 } else {
-                    // 2. 瞬间解封
-                    // 只要页面里存在刚才那个红字框（id="ban-screen"），就代表刚刚被解封了！
                     if (document.getElementById('ban-screen')) {
                         const ghostName = sessionStorage.getItem('ghost_username');
                         if (ghostName) {
                             localStorage.setItem('chat_username', ghostName);
                             sessionStorage.removeItem('ghost_username');
-                            // 强制重载，让 checkAutoLogin 接管，秒进大厅！
                             window.location.reload();
-                        } else {
-                            window.location.reload();
-                        }
+                        } else { window.location.reload(); }
                     }
                 }
             });
@@ -75,7 +66,7 @@
                 const devSnap = await get(ref(db, 'banned_devices/' + myDeviceId));
                 if (devSnap.exists()) {
                     document.documentElement.style.visibility = 'visible';
-                    document.body.innerHTML = `<div id="ban-screen" style="height:100vh; display:flex; flex-direction:column; justify-content:center; align-items:center; background:#050505; padding:20px; text-align:center;"><h1 style="color:#ff3b30; font-size:32px; margin-bottom:20px;">🚫 数据异常，已强行下线</h1></div>`;
+                    document.body.innerHTML = `<div id="ban-screen" style="height:100vh; display:flex; flex-direction:column; justify-content:center; align-items:center; background:#000; padding:20px; text-align:center;"><h1 style="color:#ff3b30; font-size:32px; font-weight:800;">🚫 数据异常，已强行下线</h1></div>`;
                     return; 
                 }
             } catch (e) {}
@@ -161,7 +152,7 @@
             if (!user || !pass) return alert('账号和密码不能为空！');
 
             get(ref(db, 'banned_devices/' + myDeviceId)).then(devSnap => {
-                if(devSnap.exists()) return alert("🚫 你的数据发生变化,已强行下线！你的设备已被作者永久封禁");
+                if(devSnap.exists()) return alert("🚫 你的设备已被永久封禁！");
                 const encryptedPass = btoa(pass);
                 get(ref(db, 'users/' + user)).then((snapshot) => {
                     if (snapshot.exists()) {
@@ -189,7 +180,6 @@
             });
         }
 
-        // 注销时：彻底清空数据
         window.deleteAccount = function() {
             if(!confirm("⚠️ 警告：确定要注销当前账号吗？")) return;
             remove(ref(db, 'users/' + myName)).then(() => { alert("账号已注销。"); localStorage.clear(); myDeviceId = getDeviceId(); window.location.reload(); });
@@ -199,7 +189,7 @@
             document.getElementById('myNameDisplay').innerText = myName;
             const listEl = document.getElementById('myGroupList');
             listEl.innerHTML = '';
-            if(myGroups.length === 0) { listEl.innerHTML = '<div style="text-align:center; color:#888; margin-top:50px;">你还没有加入任何群</div>'; return; }
+            if(myGroups.length === 0) { listEl.innerHTML = '<div style="text-align:center; color:rgba(255,255,255,0.5); margin-top:50px; font-size:14px;">你还没有加入任何群聊</div>'; return; }
             myGroups.forEach(gid => {
                 get(ref(db, `group_info/${gid}`)).then(snap => {
                     if(snap.exists()) {
@@ -308,16 +298,16 @@
             
             const div = document.createElement('div');
             let nameTag = sender;
-            if (isBoss) nameTag = `<span style="color:#ff3b30;font-weight:bold;">👑群主</span> ${sender}`;
-            else if (isAdmin) nameTag = `<span style="color:#f39c12;font-weight:bold;">🛡️管理员</span> ${sender}`;
+            if (isBoss) nameTag = `<span style="color:#ff3b30;font-weight:bold;text-shadow:0 0 10px rgba(255,59,48,0.5);">👑群主</span> ${sender}`;
+            else if (isAdmin) nameTag = `<span style="color:#f39c12;font-weight:bold;text-shadow:0 0 10px rgba(243,156,18,0.5);">🛡️管理员</span> ${sender}`;
 
             if (sender === "📢 系统公告" || sender === "📢 系统提示" || sender === "👑 作者(隐身)") {
                 div.className = `msg theirs`;
-                div.innerHTML = `<div class="msg-name">${sender === "👑 作者(隐身)" ? '作者(隐身)' : '系统公告'}</div><div class="msg-text admin-glow">${text}</div>`;
+                div.innerHTML = `<div class="msg-name" style="text-align:center;">${sender === "👑 作者(隐身)" ? '作者(隐身)' : '系统公告'}</div><div class="msg-text admin-glow">${text}</div>`;
             } else {
                 div.className = `msg ${isMe ? 'mine' : 'theirs'}`;
                 let bubbleStyle = "";
-                if (isAdmin && !isMe) bubbleStyle = "background: linear-gradient(135deg, #fff3e0, #ffe0b2); border: 1px solid #ffb74d;";
+                if (isAdmin && !isMe) bubbleStyle = "background: linear-gradient(135deg, rgba(243,156,18,0.2), rgba(255,183,77,0.3)); border: 1px solid rgba(243,156,18,0.5); color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,0.5); box-shadow: 0 4px 15px rgba(243,156,18,0.2);";
 
                 const iAmOwner = (myName === currentGroupInfo.creator);
                 const iAmAdmin = (currentGroupInfo.admins && currentGroupInfo.admins.includes(myName));
@@ -349,17 +339,89 @@
                 const btnMute = document.getElementById('btnMute');
                 if (muteSnap.exists() && muteSnap.val() > Date.now()) {
                     btnMute.innerText = '解除禁言';
-                    btnMute.style.background = '#07c160';
+                    btnMute.style.background = 'rgba(52,199,89,0.2)';
+                    btnMute.style.color = '#34c759';
                     btnMute.onclick = unmuteTarget;
                 } else {
                     btnMute.innerText = '禁言该用户';
-                    btnMute.style.background = '#f39c12';
+                    btnMute.style.background = 'rgba(255,149,0,0.2)';
+                    btnMute.style.color = '#ff9500';
                     btnMute.onclick = muteTarget;
                 }
             });
 
             document.getElementById('modalTargetName').innerText = targetName;
             document.getElementById('actionModal').style.display = 'flex';
+        }
+
+        // ================= 修复：恢复群设置弹窗 =================
+        window.openGroupSettings = function() {
+            document.getElementById('settingsModal').style.display = 'flex';
+            document.getElementById('displayGroupId').innerText = currentGroupId;
+            loadMemberList();
+        }
+        window.closeSettings = function() { document.getElementById('settingsModal').style.display = 'none'; }
+
+        // 渲染群成员列表：点击名字弹出操作框
+        function loadMemberList() {
+            const memberListEl = document.getElementById('memberList');
+            memberListEl.innerHTML = '<div style="text-align:center; color:rgba(255,255,255,0.5); padding:10px;">正在扫描成员...</div>';
+            const membersSet = new Set();
+            get(ref(db, `groups/${currentGroupId}/messages`)).then((snapshot) => {
+                if(snapshot.exists()) {
+                    snapshot.forEach((msg) => {
+                        const sender = msg.val().sender;
+                        if(!sender.includes("作者") && !sender.includes("📢")) membersSet.add(sender);
+                    });
+                }
+                membersSet.add(currentGroupInfo.creator);
+                membersSet.add(myName);
+
+                memberListEl.innerHTML = '';
+                const iAmOwner = (myName === currentGroupInfo.creator);
+
+                membersSet.forEach(member => {
+                    const isMemberBoss = (member === currentGroupInfo.creator);
+                    const isMemberAdmin = (currentGroupInfo.admins && currentGroupInfo.admins.includes(member));
+                    let tag = isMemberBoss ? "👑 群主" : (isMemberAdmin ? "🛡️ 管理员" : "");
+
+                    const clickAction = iAmOwner && !isMemberBoss && member !== myName ? `onclick="openMemberAction('${member}')"` : '';
+
+                    const row = document.createElement('div');
+                    row.style = `display:flex; justify-content:space-between; align-items:center; padding:12px 0; border-bottom:1px solid rgba(255,255,255,0.1); ${clickAction ? 'cursor:pointer;' : ''}`;
+                    row.innerHTML = `
+                        <div ${clickAction}>
+                            <span style="font-weight:bold; color:#fff;">${member}</span> 
+                            <span style="font-size:12px; color:#f39c12; font-weight:bold;">${tag}</span>
+                        </div>
+                        ${iAmOwner && !isMemberBoss && member !== myName ? '<span style="font-size:12px; color:rgba(255,255,255,0.4);">点此操作 ›</span>' : ''}
+                    `;
+                    memberListEl.appendChild(row);
+                });
+            });
+        }
+
+        window.openMemberAction = function(member) {
+            const isAdmin = currentGroupInfo.admins.includes(member);
+            const action = confirm(`对【${member}】的操作：\n\n点击“确定” = ${isAdmin ? '撤销管理员' : '设为管理员'}\n点击“取消” = 踢出群聊`);
+            
+            if (action) {
+                let newAdmins;
+                if (isAdmin) newAdmins = currentGroupInfo.admins.filter(a => a !== member);
+                else newAdmins = [...currentGroupInfo.admins, member];
+                
+                update(ref(db, 'group_info/' + currentGroupId), { admins: newAdmins }).then(() => {
+                    push(ref(db, `groups/${currentGroupId}/messages`), { sender: "📢 系统提示", text: isAdmin ? `${member} 被撤销了管理员` : `${member} 被设为管理员`, time: Date.now() });
+                    loadMemberList();
+                });
+            } else {
+                if(confirm(`⚠️ 再次确认：将【${member}】踢出群聊？`)) {
+                    set(ref(db, `groups/${currentGroupId}/kicked/${member}`), true).then(() => {
+                        push(ref(db, `groups/${currentGroupId}/messages`), { sender: "📢 系统提示", text: `${member} 已被踢出`, time: Date.now() });
+                        loadMemberList();
+                    });
+                }
+            }
         }
 
         window.parseTimeInput = function(input) {
@@ -429,61 +491,182 @@
         window.copyGroupId = function() { navigator.clipboard.writeText(currentGroupId).then(() => { alert("群号已复制！"); }); }
     </script>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, sans-serif; -webkit-tap-highlight-color: transparent;}
-        body { background: #ededed; height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+        /* ================= 极光炫彩深色 UI ================= */
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; -webkit-tap-highlight-color: transparent;}
+        
+        /* 深色极光流体背景 */
+        body { 
+            background: #000; 
+            color: #fff;
+            height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; 
+            position: relative;
+        }
+        body::before {
+            content: ''; position: fixed; top: -50vh; left: -50vw; width: 200vw; height: 200vh;
+            background: radial-gradient(circle at 20% 30%, rgba(100,200,255,0.4) 0%, transparent 40%), 
+                        radial-gradient(circle at 80% 70%, rgba(255,100,200,0.4) 0%, transparent 40%);
+            animation: spin 20s linear infinite; filter: blur(40px); z-index: -1;
+        }
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+
         #loginScreen, #lobbyScreen, #chatScreen { display: none; flex: 1; flex-direction: column; height: 100%; overflow: hidden; }
-        #loginScreen { background: #fff; justify-content: center; align-items: center; }
-        .lobby-header { background: #ededed; padding: 20px; font-size: 20px; font-weight: bold; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ddd; flex-shrink: 0;}
-        .logout-btn { background: none; border: none; color: #ff3b30; font-size: 14px; cursor: pointer; }
-        .lobby-btns { padding: 20px; display: flex; gap: 10px; background: #fff; border-bottom: 8px solid #ededed; flex-shrink: 0;}
-        .lobby-btns button { flex: 1; padding: 12px; border: none; border-radius: 8px; font-weight: bold; font-size: 15px; cursor: pointer; background: #007aff; color: white;}
-        .btn-join-box { display: flex; gap: 10px; padding: 20px; background: #fff; flex-shrink: 0;}
-        .btn-join-box input { flex: 1; padding: 12px; border: 1px solid #ddd; border-radius: 8px; outline: none;}
-        .btn-join-box button { padding: 0 20px; background: #07c160; color: white; border: none; border-radius: 8px; font-weight: bold;}
-        .group-list { flex: 1; overflow-y: auto; background: #fff; -webkit-overflow-scrolling: touch;}
-        .chat-item { display: flex; align-items: center; padding: 15px; border-bottom: 1px solid #f0f0f0; cursor: pointer; }
-        .avatar { width: 50px; height: 50px; border-radius: 8px; background: #07c160; display: flex; justify-content: center; align-items: center; font-size: 24px; margin-right: 15px; }
-        .info .name { font-size: 17px; font-weight: 500; }
-        .header { background: #ededed; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ddd; flex-shrink: 0;}
-        .header-left { display: flex; align-items: center; gap: 10px; }
-        .header h1 { font-size: 18px; color: #000; margin: 0;}
-        .leave-btn { background: none; border: none; color: #007aff; font-size: 16px; cursor: pointer; }
-        .chat-content { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 15px; -webkit-overflow-scrolling: touch; }
+        
+        /* 登录页磨砂卡片 */
+        #loginScreen { justify-content: center; align-items: center; }
+        .login-box {
+            background: rgba(255,255,255,0.05); backdrop-filter: blur(30px); -webkit-backdrop-filter: blur(30px);
+            padding: 40px 30px; border-radius: 24px; width: 85%; max-width: 340px;
+            box-shadow: 0 30px 60px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.2); border-top-color: rgba(255,255,255,0.5);
+            display: flex; flex-direction: column;
+        }
+        .login-box h1 { text-align:center; margin-bottom: 30px; font-size: 32px; font-weight: 800; letter-spacing: -1px; color: #fff; text-shadow: 0 0 20px rgba(255,255,255,0.3);}
+        .login-box input {
+            width: 100%; padding: 16px; border: 1px solid rgba(255,255,255,0.1); border-radius: 14px;
+            margin-bottom: 15px; outline: none; font-size: 16px; background: rgba(0,0,0,0.3); color: #fff; transition: 0.2s;
+        }
+        .login-box input:focus { border-color: rgba(255,255,255,0.5); background: rgba(0,0,0,0.5); }
+
+        /* 大厅顶栏 */
+        .lobby-header { 
+            background: rgba(0,0,0,0.3); backdrop-filter: blur(20px); 
+            border-bottom: 1px solid rgba(255,255,255,0.1); padding: 20px; font-size: 20px; font-weight: 800; 
+            display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; color: #fff;
+        }
+        .logout-btn { 
+            background: rgba(255,59,48,0.15); border: 1px solid rgba(255,59,48,0.3); color: #ff453a; 
+            font-size: 13px; font-weight: 600; cursor: pointer; padding: 6px 12px; border-radius: 10px; transition: 0.2s;
+        }
+        .lobby-btns { padding: 20px; display: flex; gap: 10px; flex-shrink: 0;}
+        .lobby-btns button { 
+            flex: 1; padding: 14px; border: 1px solid rgba(0,122,255,0.5); border-radius: 14px; font-weight: bold; 
+            font-size: 15px; cursor: pointer; background: rgba(0,122,255,0.2); color: #0a84ff; 
+            box-shadow: 0 8px 20px rgba(0,122,255,0.15); backdrop-filter: blur(10px); transition: 0.2s;
+        }
+        .btn-join-box { display: flex; gap: 10px; padding: 0 20px 20px 20px; flex-shrink: 0;}
+        .btn-join-box input { 
+            flex: 1; padding: 14px; border: 1px solid rgba(255,255,255,0.1); border-radius: 14px; 
+            outline: none; font-size: 15px; background: rgba(0,0,0,0.3); color: #fff;
+        }
+        .btn-join-box button { 
+            padding: 0 20px; background: rgba(52,199,89,0.2); border: 1px solid rgba(52,199,89,0.5); color: #30d158; 
+            border-radius: 14px; font-weight: bold; box-shadow: 0 8px 20px rgba(52,199,89,0.15); backdrop-filter: blur(10px); transition: 0.2s;
+        }
+        
+        /* 群聊列表 */
+        .group-list { flex: 1; overflow-y: auto; padding: 10px 20px; -webkit-overflow-scrolling: touch;}
+        .chat-item { 
+            display: flex; align-items: center; padding: 16px; margin-bottom: 12px; 
+            background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); 
+            border-radius: 18px; box-shadow: 0 10px 20px rgba(0,0,0,0.2); cursor: pointer; transition: 0.2s; backdrop-filter: blur(10px);
+        }
+        .chat-item:active { transform: scale(0.97); background: rgba(255,255,255,0.1); }
+        .avatar { 
+            width: 48px; height: 48px; border-radius: 14px; background: linear-gradient(135deg, #00c6ff, #0072ff); 
+            display: flex; justify-content: center; align-items: center; font-size: 22px; margin-right: 15px; color: white; 
+            box-shadow: 0 4px 10px rgba(0,122,255,0.3);
+        }
+        .info .name { font-size: 17px; font-weight: 600; color: #fff;}
+
+        /* 聊天室顶栏 */
+        .header { 
+            background: rgba(0,0,0,0.3); backdrop-filter: blur(20px); 
+            border-bottom: 1px solid rgba(255,255,255,0.1); padding: 15px 20px; 
+            display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;
+        }
+        .header-left { display: flex; align-items: center; gap: 15px; }
+        .header h1 { font-size: 18px; font-weight: 700; color: #fff; margin: 0; text-shadow: 0 2px 5px rgba(0,0,0,0.5);}
+        .leave-btn { background: none; border: none; color: #0a84ff; font-size: 16px; cursor: pointer; font-weight: 600;}
+        
+        /* 🌟 恢复设置按钮 */
+        .settings-btn { 
+            background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); 
+            font-size: 20px; cursor: pointer; color: #fff; border-radius: 10px; padding: 5px 12px;
+            transition: 0.2s;
+        }
+        .settings-btn:active { background: rgba(255,255,255,0.2); transform: scale(0.95); }
+
+        /* 聊天内容区 */
+        .chat-content { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; -webkit-overflow-scrolling: touch; }
+        
         .msg { display: flex; flex-direction: column; max-width: 80%; }
         .msg.mine { align-self: flex-end; align-items: flex-end; }
         .msg.theirs { align-self: flex-start; align-items: flex-start; }
-        .msg-name { font-size: 12px; color: #888; margin-bottom: 5px; }
-        .msg-text { padding: 12px 16px; border-radius: 12px; font-size: 16px; line-height: 1.4; word-break: break-all; transition: background 0.2s;}
-        .msg.theirs .msg-text:hover { background: #e5e5e5; }
-        .msg.mine .msg-text { background: #95ec69; color: #000; border-top-right-radius: 2px; }
-        .msg.theirs .msg-text { background: #fff; color: #000; border-top-left-radius: 2px; }
-        .admin-glow { background: linear-gradient(135deg, #ff3b30, #ff007f) !important; color: #fff !important; font-weight: bold; box-shadow: 0 0 15px rgba(255, 59, 48, 0.8), 0 0 30px rgba(255, 0, 127, 0.5) !important; animation: pulse 2s infinite; }
-        @keyframes pulse { 0% { box-shadow: 0 0 10px rgba(255, 59, 48, 0.6); } 50% { box-shadow: 0 0 20px rgba(255, 59, 48, 1); } 100% { box-shadow: 0 0 10px rgba(255, 59, 48, 0.6); } }
-        .input-area { padding: 15px; background: #f7f7f7; border-top: 1px solid #ddd; display: flex; gap: 10px; flex-shrink: 0; padding-bottom: calc(15px + env(safe-area-inset-bottom)); }
-        .input-area input { flex: 1; padding: 12px; border-radius: 8px; border: none; background: #fff; outline: none; font-size:16px;}
-        .input-area button { padding: 0 25px; border-radius: 8px; background: #07c160; color: white; border: none; font-weight: bold; font-size:16px;}
+        .msg-name { font-size: 12px; color: rgba(255,255,255,0.6); margin-bottom: 6px; font-weight: 500;}
+        .msg-text { 
+            padding: 14px 18px; border-radius: 20px; font-size: 16px; line-height: 1.4; word-break: break-all; 
+            transition: background 0.2s; box-shadow: 0 4px 15px rgba(0,0,0,0.2); backdrop-filter: blur(10px);
+        }
+        
+        .msg.theirs .msg-text:hover { background: rgba(255,255,255,0.15) !important; }
+        
+        .msg.mine .msg-text { 
+            background: linear-gradient(135deg, #0072ff, #00c6ff); color: #fff; border-bottom-right-radius: 4px; 
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+        .msg.theirs .msg-text { 
+            background: rgba(255,255,255,0.1); color: #fff; border-bottom-left-radius: 4px; 
+            border: 1px solid rgba(255,255,255,0.15);
+        }
 
-        #actionModal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); display: none; justify-content: center; align-items: center; z-index: 999; }
-        .action-box { background: #fff; width: 80%; max-width: 300px; padding: 20px; border-radius: 12px; display: flex; flex-direction: column; gap: 10px; }
-        .action-box h3 { text-align: center; margin-bottom: 5px; color: #333; }
-        .action-box button { padding: 12px; border: none; border-radius: 8px; font-weight: bold; font-size: 15px; cursor: pointer; }
-        .btn-close { background: #eee; color: #333; margin-top: 10px; }
+        /* 作者专属高光特效 */
+        .admin-glow { 
+            background: linear-gradient(135deg, #ff0844 0%, #ffb199 100%) !important; 
+            color: #fff !important; font-weight: bold; border: 1px solid rgba(255,255,255,0.3) !important;
+            box-shadow: 0 0 20px rgba(255, 8, 68, 0.6) !important; 
+            animation: pulse 2s infinite; text-shadow: 0 1px 3px rgba(0,0,0,0.5);
+        }
+        @keyframes pulse { 0% { box-shadow: 0 0 10px rgba(255, 8, 68, 0.4); } 50% { box-shadow: 0 0 25px rgba(255, 8, 68, 0.8); } 100% { box-shadow: 0 0 10px rgba(255, 8, 68, 0.4); } }
+
+        /* 底部输入框 */
+        .input-area { 
+            padding: 15px 20px; background: rgba(0,0,0,0.4); backdrop-filter: blur(20px);
+            border-top: 1px solid rgba(255,255,255,0.1); display: flex; gap: 12px; flex-shrink: 0; 
+            padding-bottom: calc(15px + env(safe-area-inset-bottom)); 
+        }
+        .input-area input { 
+            flex: 1; padding: 14px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.1); 
+            background: rgba(255,255,255,0.05); color: #fff; outline: none; font-size:16px; 
+        }
+        .input-area input:focus { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.3); }
+        .input-area button { 
+            padding: 0 24px; border-radius: 16px; background: linear-gradient(135deg, #0072ff, #00c6ff); 
+            color: white; border: none; font-weight: bold; font-size:16px; box-shadow: 0 8px 20px rgba(0,122,255,0.3);
+        }
+
+        /* 弹窗 (Action Sheet) */
+        #actionModal, #settingsModal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); backdrop-filter: blur(10px); display: none; justify-content: center; align-items: center; z-index: 999; }
+        .action-box, .modal-box { 
+            background: rgba(30,30,30,0.8); backdrop-filter: blur(30px); border: 1px solid rgba(255,255,255,0.15);
+            width: 85%; max-width: 340px; padding: 24px; border-radius: 24px; 
+            display: flex; flex-direction: column; gap: 12px; box-shadow: 0 30px 60px rgba(0,0,0,0.5); max-height: 80vh; overflow-y: auto;
+        }
+        .action-box h3, .modal-box h3 { text-align: center; margin-bottom: 10px; color: #fff; font-size: 18px; font-weight: 700;}
+        .action-box button, .modal-box button { padding: 14px; border: none; border-radius: 14px; font-weight: 600; font-size: 16px; cursor: pointer; transition: 0.2s;}
+        .btn-close { background: rgba(255,255,255,0.1); color: #fff; margin-top: 10px; }
+
+        .member-list { margin-top: 10px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 10px; }
+        
+        /* 登录/注册按钮 */
+        .btn-login { background: linear-gradient(135deg, #0072ff, #00c6ff); box-shadow: 0 8px 25px rgba(0,122,255,0.4); color: white; }
+        .btn-one-click { background: rgba(0,122,255,0.15); color: #0a84ff; border: 1px solid rgba(0,122,255,0.3); }
     </style>
 </head>
 <body>
     <div id="loginScreen">
-        <h1 style="color:#07c160; margin-bottom:30px;">聊天室</h1>
-        <input type="text" id="username" placeholder="输入账号" style="width:100%; max-width:300px; padding:15px; border:1px solid #ddd; border-radius:8px; margin-bottom:15px; outline:none; font-size:16px;">
-        <input type="password" id="password" placeholder="输入密码" style="width:100%; max-width:300px; padding:15px; border:1px solid #ddd; border-radius:8px; margin-bottom:15px; outline:none; font-size:16px;">
-        <button onclick="loginOrRegister()" style="width:100%; max-width:300px; padding:15px; background:#07c160; color:white; border:none; border-radius:8px; font-weight:bold; font-size:16px; margin-bottom: 15px;">登录 / 注册</button>
-        <button id="oneClickLoginBtn" onclick="doOneClickLogin()" style="width:100%; max-width:300px; padding:15px; background:#f0f0f0; color:#07c160; border:1px solid #07c160; border-radius:8px; font-weight:bold; font-size:16px; display:none;">一键登录</button>
+        <div class="login-box">
+            <h1>Chat</h1>
+            <input type="text" id="username" placeholder="账号">
+            <input type="password" id="password" placeholder="密码">
+            <button class="btn-login" onclick="loginOrRegister()" style="width:100%; padding:16px; border:none; border-radius:14px; font-weight:bold; font-size:16px; margin-bottom: 15px;">登录 / 注册</button>
+            <button id="oneClickLoginBtn" class="btn-one-click" onclick="doOneClickLogin()" style="width:100%; padding:16px; border:none; border-radius:14px; font-weight:bold; font-size:16px; display:none;">一键登录</button>
+        </div>
     </div>
 
     <div id="lobbyScreen">
         <div class="lobby-header">
             <span>聊天大厅</span>
             <div style="display:flex; align-items:center; gap:15px;">
-                <span id="myNameDisplay" style="font-size:14px; color:#07c160;"></span>
+                <span id="myNameDisplay" style="font-size:14px; color:#00c6ff; font-weight:700;"></span>
                 <button class="logout-btn" onclick="deleteAccount()">注销</button>
             </div>
         </div>
@@ -495,6 +678,8 @@
     <div id="chatScreen">
         <div class="header">
             <div class="header-left"><button class="leave-btn" onclick="goLobby()">〈 大厅</button><h1 id="displayGroupName">群聊</h1></div>
+            <!-- 🌟 恢复的 ⚙️ 设置按钮 -->
+            <button class="settings-btn" onclick="openGroupSettings()">⚙️</button>
         </div>
         <div class="chat-content" id="chatContent"></div>
         <div class="input-area">
@@ -503,14 +688,33 @@
         </div>
     </div>
 
-    <!-- 操作弹窗 -->
+    <!-- 聊天消息里的操作弹窗 -->
     <div id="actionModal">
         <div class="action-box">
-            <h3>对 <span id="modalTargetName" style="color:#007aff;"></span> 操作</h3>
-            <button id="btnSetAdmin" style="background: #007aff; color: white;"></button>
-            <button id="btnMute" style="background: #f39c12; color: white;"></button>
-            <button onclick="kickTarget()" style="background: #ff3b30; color: white;">踢出群聊</button>
+            <h3>管理 <span id="modalTargetName" style="color:#00c6ff;"></span></h3>
+            <button id="btnSetAdmin" style="background: rgba(0,122,255,0.15); color: #0a84ff; border: 1px solid rgba(0,122,255,0.3);"></button>
+            <button id="btnMute" style="background: rgba(255,149,0,0.15); color: #ff9500; border: 1px solid rgba(255,149,0,0.3);"></button>
+            <button onclick="kickTarget()" style="background: rgba(255,59,48,0.15); color: #ff453a; border: 1px solid rgba(255,59,48,0.3);">踢出群聊</button>
             <button class="btn-close" onclick="closeActionModal()">取消</button>
+        </div>
+    </div>
+
+    <!-- 🌟 恢复的 群设置（成员列表）弹窗 -->
+    <div id="settingsModal">
+        <div class="modal-box">
+            <h3>群聊设置</h3>
+            <div style="background: rgba(0,0,0,0.4); padding: 10px; border-radius: 14px; margin-bottom: 15px; text-align: center; font-size: 14px; border: 1px solid rgba(255,255,255,0.05);">
+                群号：<strong id="displayGroupId" style="color: #00c6ff; font-size: 18px; text-shadow: 0 0 10px rgba(0,198,255,0.5);"></strong>
+                <button onclick="copyGroupId()" style="width: auto; padding: 5px 10px; margin: 5px auto 0; display: block; background: rgba(0,122,255,0.2); color: #0a84ff; font-size: 12px; border-radius:6px; border:1px solid rgba(0,122,255,0.3);">一键复制</button>
+            </div>
+            
+            <div class="member-list">
+                <h4 style="margin-bottom: 10px; color:#fff; font-size:15px; text-align:left;">群成员管理</h4>
+                <div id="memberList"></div>
+            </div>
+
+            <button onclick="leaveGroup()" style="background: rgba(255,59,48,0.15); color: #ff453a; border: 1px solid rgba(255,59,48,0.3); margin-top: 20px;">退出群聊</button>
+            <button class="btn-close" onclick="closeSettings()">关闭</button>
         </div>
     </div>
 </body>
