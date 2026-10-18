@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>极光聊天 · 玩家端</title>
   <script>
-    // 提前判断缓存，避免闪屏（仅在有缓存时隐藏，登录检查后恢复）
     if (localStorage.getItem('chat_username')) {
       document.documentElement.style.visibility = 'hidden';
     }
@@ -14,24 +13,22 @@
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
     import {
       getDatabase, ref, push, onValue, query, limitToLast,
-      get, set, update, remove, child
+      get, set, update, remove
     } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
 
-    /* ==================== 配置 ==================== */
     const firebaseConfig = {
       databaseURL: "https://class3b-5b39b-default-rtdb.asia-southeast1.firebasedatabase.app"
     };
     const app = initializeApp(firebaseConfig);
     const db = getDatabase(app);
 
-    /* ==================== 全局状态 ==================== */
     let myName = "";
     let myDeviceId = "";
     let currentGroupId = "";
     let myGroups = JSON.parse(localStorage.getItem('chat_mygroups') || "[]");
     let currentGroupInfo = {};
     let actionTargetName = "";
-    let isAuthor = false; // 当前登录用户是否为作者
+    let isAuthor = false;
     let banListenerBound = false;
 
     /* ==================== 设备码 ==================== */
@@ -46,29 +43,20 @@
     myDeviceId = getDeviceId();
 
     /* ==================== 工具：时间解析 ==================== */
-    // 支持 1m / 1h / 1d / 1e+99d（无限）
     function parseTimeInput(input) {
       if (!input) return 0;
       input = String(input).trim().toLowerCase();
-
-      // 无限禁言（指数形式）
       if (input.includes('e+') || input.includes('e')) {
         const numPart = parseFloat(input.replace(/[^0-9.e+]/g, ''));
         if (isNaN(numPart)) return 0;
-        // 极大值视为永久（约100年）
         if (numPart > 1e+10) return 3153600000000;
-        // 正常指数按 d 处理
         return numPart * 24 * 60 * 60 * 1000;
       }
-
       let num = parseFloat(input);
       if (isNaN(num)) return 0;
-
       if (input.includes('m')) return num * 60 * 1000;
       if (input.includes('h')) return num * 60 * 60 * 1000;
       if (input.includes('d')) return num * 24 * 60 * 60 * 1000;
-
-      // 默认分钟
       return num * 60 * 1000;
     }
 
@@ -81,7 +69,6 @@
     }
 
     /* ==================== 设备封禁监听 ==================== */
-    // 黑屏渲染
     function showBanScreen() {
       document.body.innerHTML = `
         <div id="ban-screen" style="position:fixed;top:0;left:0;width:100%;height:100%;background:#000;display:flex;justify-content:center;align-items:center;z-index:99999;flex-direction:column;padding:20px;text-align:center;">
@@ -90,28 +77,22 @@
         </div>`;
     }
 
-    // 绑定设备封禁监听（只绑定一次）
     function bindDeviceBanMonitor() {
       if (banListenerBound) return;
       banListenerBound = true;
-
       onValue(ref(db, 'banned_devices/' + myDeviceId), (snap) => {
         if (snap.exists()) {
-          // 保存当前账号用于解封后恢复
           const currentName = localStorage.getItem('chat_username');
           if (currentName) sessionStorage.setItem('ghost_username', currentName);
           showBanScreen();
         } else {
-          // 解封：如果之前是因为封禁被踢下，恢复免密登录
           if (document.getElementById('ban-screen')) {
             const ghostName = sessionStorage.getItem('ghost_username');
             if (ghostName) {
               sessionStorage.removeItem('ghost_username');
-              // 恢复缓存并刷新，自动免密登录
               localStorage.setItem('chat_username', ghostName);
               window.location.reload();
             } else {
-              // 原本就没登录，正常回到登录页
               window.location.reload();
             }
           }
@@ -122,16 +103,13 @@
     /* ==================== 自动登录 ==================== */
     async function checkAutoLogin() {
       try {
-        // 先检查设备封禁（防穿透）
         const devSnap = await get(ref(db, 'banned_devices/' + myDeviceId));
         if (devSnap.exists()) {
           document.documentElement.style.visibility = 'visible';
           showBanScreen();
           return;
         }
-      } catch (e) {
-        console.warn('封禁检查失败', e);
-      }
+      } catch (e) {}
 
       const savedUser = localStorage.getItem('chat_username');
       if (savedUser) {
@@ -140,7 +118,6 @@
           if (snapshot.exists()) {
             myName = savedUser;
             isAuthor = !!snapshot.val().isAuthor;
-            // 登录成功，绑定设备码（确保绑定）
             update(ref(db, 'users/' + savedUser), { deviceId: myDeviceId }).catch(() => {});
             document.documentElement.style.visibility = 'visible';
             showScreen('lobbyScreen');
@@ -150,9 +127,7 @@
             localStorage.removeItem('chat_username');
             localStorage.removeItem('chat_mygroups');
           }
-        } catch (e) {
-          console.warn(e);
-        }
+        } catch (e) {}
       }
       document.documentElement.style.visibility = 'visible';
       showScreen('loginScreen');
@@ -164,12 +139,10 @@
       checkAutoLogin();
       bindDeviceBanMonitor();
 
-      // 系统广播监听
       onValue(ref(db, 'system_broadcast'), (snap) => {
         if (snap.exists()) {
           const data = snap.val();
           if (Date.now() - (data.time || 0) > 10000) return;
-
           if (data.action === "delete_all_users" && !sessionStorage.getItem('alerted_delete_users')) {
             sessionStorage.setItem('alerted_delete_users', 'true');
             alert("🚨 系统紧急通知：\n管理员已注销所有账号数据，请重新注册！");
@@ -177,7 +150,6 @@
             myDeviceId = getDeviceId();
             window.location.reload();
           }
-
           if (data.action === "global_announcement" && !sessionStorage.getItem('alerted_announce_' + data.time)) {
             sessionStorage.setItem('alerted_announce_' + data.time, 'true');
             alert(`📢 系统全网公告\n\n${data.text}`);
@@ -234,10 +206,8 @@
         if (devSnap.exists()) return alert("🚫 你的设备已被永久封禁！");
 
         const encryptedPass = btoa(pass);
-
         get(ref(db, 'users/' + user)).then((snapshot) => {
           if (snapshot.exists()) {
-            // 已有账号：校验密码
             if (snapshot.val().password === encryptedPass) {
               myName = user;
               isAuthor = !!snapshot.val().isAuthor;
@@ -250,9 +220,7 @@
               alert('密码错误！');
             }
           } else {
-            // 新账号：强制查重（这里因唯一主键天然唯一，二次确认注册）
             if (confirm(`账号 "${user}" 不存在，是否注册新账号？`)) {
-              // 再次检查，防止并发抢注
               get(ref(db, 'users/' + user)).then((checkSnap) => {
                 if (checkSnap.exists()) {
                   alert("❌ 该用户名已被抢注，请换一个！");
@@ -323,6 +291,7 @@
               const gName = snap.val().name || ("群聊 " + gid);
               const div = document.createElement('div');
               div.className = 'chat-item';
+              // 修复：确保 avatar 和 info 水平对齐
               div.innerHTML = `<div class="avatar">👥</div><div class="info"><div class="name">${gName}</div></div>`;
               div.onclick = () => enterChat(gid);
               listEl.appendChild(div);
@@ -393,17 +362,14 @@
       showScreen('chatScreen');
       document.getElementById('chatContent').innerHTML = '';
 
-      // 解绑旧监听
       if (chatInfoListener) { chatInfoListener(); chatInfoListener = null; }
       if (chatMsgListener) { chatMsgListener(); chatMsgListener = null; }
 
-      // 群信息监听
       const unsubInfo = onValue(ref(db, 'group_info/' + gid), (snap) => {
         if (snap.exists()) {
           currentGroupInfo = snap.val();
           document.getElementById('displayGroupName').innerText = currentGroupInfo.name || ("群 " + gid);
         } else {
-          // 群被销毁
           if (currentGroupId === gid) {
             if (myGroups.includes(gid)) {
               myGroups = myGroups.filter(id => id !== gid);
@@ -416,7 +382,6 @@
       });
       chatInfoListener = unsubInfo;
 
-      // 消息监听
       const messagesRef = query(ref(db, `groups/${gid}/messages`), limitToLast(50));
       const unsubMsg = onValue(messagesRef, (snapshot) => {
         const box = document.getElementById('chatContent');
@@ -444,11 +409,9 @@
       const text = input.value.trim();
       if (!text) return;
 
-      // 检查全网封杀
       get(ref(db, 'banned/' + myName)).then((snap) => {
         if (snap.exists()) return alert("🚫 你已被全网封杀，无法发言！");
 
-        // 检查本群禁言
         get(ref(db, `groups/${currentGroupId}/muted/${myName}`)).then((muteSnap) => {
           if (muteSnap.exists()) {
             const until = muteSnap.val();
@@ -456,12 +419,10 @@
               const remain = until - Date.now();
               return alert(`🚫 你已被禁言，剩余 ${formatRemain(remain)}！`);
             } else {
-              // 禁言已过期，自动清除
               remove(ref(db, `groups/${currentGroupId}/muted/${myName}`)).catch(() => {});
             }
           }
 
-          // 发送消息（作者带 isAuthorMsg 标记）
           push(ref(db, `groups/${currentGroupId}/messages`), {
             sender: myName,
             text: text,
@@ -483,7 +444,6 @@
       const isMe = (sender === myName);
       const isBoss = (sender === currentGroupInfo.creator);
       const isAdmin = currentGroupInfo.admins && currentGroupInfo.admins.includes(sender);
-      // 作者消息判断：优先 isAuthorMsg，或名字匹配
       const isFromAuthor = !!isAuthorMsg;
 
       const div = document.createElement('div');
@@ -497,7 +457,6 @@
         nameTag = `<span style="color:#ff0080;font-weight:bold;text-shadow:0 0 10px rgba(255,0,128,0.8);">作者</span> ${sender}`;
       }
 
-      // 系统/作者公告
       if (sender === "📢 系统公告" || sender === "📢 系统提示" || sender === "👑 作者(隐身)") {
         div.className = `msg theirs`;
         const isAuthorGhost = (sender === "👑 作者(隐身)");
@@ -516,7 +475,6 @@
           bubbleStyle = "background: linear-gradient(135deg, rgba(243,156,18,0.2), rgba(255,183,77,0.3)); border: 1px solid rgba(243,156,18,0.5); color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,0.5); box-shadow: 0 4px 15px rgba(243,156,18,0.2);";
         }
 
-        // 权限判断：可点击管理
         const iAmOwner = (myName === currentGroupInfo.creator);
         const iAmAdmin = (currentGroupInfo.admins && currentGroupInfo.admins.includes(myName));
         const canManage = (iAmOwner || iAmAdmin) && !isMe && !isBoss && !isFromAuthor;
@@ -714,7 +672,6 @@
       navigator.clipboard.writeText(currentGroupId).then(() => {
         alert("群号已复制！");
       }).catch(() => {
-        // 兼容旧浏览器
         const ta = document.createElement('textarea');
         ta.value = currentGroupId;
         document.body.appendChild(ta);
@@ -725,14 +682,12 @@
       });
     };
 
-    /* ==================== 🎵 音乐播放器（修复） ==================== */
-    // 修复点：改用 addEventListener 绑定 + 修复 CSS 语法 + 高 z-index
+    /* ==================== 🎵 音乐播放器 ==================== */
     function initMusicPlayer() {
       const musicFab = document.getElementById('musicFab');
       const musicPlayer = document.getElementById('musicPlayer');
       const closeBtn = musicPlayer.querySelector('.music-close');
 
-      // 显式绑定点击，避免被其它层拦截
       musicFab.addEventListener('click', function (e) {
         e.stopPropagation();
         e.preventDefault();
@@ -744,7 +699,6 @@
         musicPlayer.classList.remove('show');
       });
 
-      // 搜索框回车
       const searchInput = document.getElementById('musicSearchInput');
       searchInput.addEventListener('keydown', function (e) {
         if (e.key === 'Enter') {
@@ -817,7 +771,6 @@
       }
     };
 
-    // 页面加载后初始化音乐播放器
     document.addEventListener('DOMContentLoaded', initMusicPlayer);
   </script>
   <style>
@@ -911,18 +864,22 @@
       backdrop-filter: blur(20px);
       border-bottom: 1px solid rgba(255,255,255,0.1);
       padding: 20px;
-      {
- font-size: 20px;
-      font-weight: 800     ;
+      font-size: 20px;
+      font-weight: 800;
       display: flex;
       justify-content: space-between;
- flex      align-items: center;
+      align-items: center;
       flex-shrink: 0;
-:      color: #fff;
+      color: #fff;
+    }
+    .lobby-header > div {
+      display: flex;
+      align-items: center;
+      gap: 15px;
     }
     .logout-btn {
-       background: rgba(255,59,48,0.15);
-      border: 1px solid1 rgba(255,59,48,0.3);
+      background: rgba(255,59,48,0.15);
+      border: 1px solid rgba(255,59,48,0.3);
       color: #ff453a;
       font-size: 13px;
       font-weight: 600;
@@ -931,6 +888,8 @@
       border-radius: 10px;
       transition: 0.2s;
     }
+    
+    /* 修复：确保大厅按钮样式正确应用 */
     .lobby-btns {
       padding: 20px;
       display: flex;
@@ -984,6 +943,8 @@
       padding: 10px 20px;
       -webkit-overflow-scrolling: touch;
     }
+    
+    /* 修复：确保群列表项里的头像和文字水平排列 */
     .chat-item {
       display: flex;
       align-items: center;
@@ -1013,6 +974,7 @@
       margin-right: 15px;
       color: white;
       box-shadow: 0 4px 10px rgba(0,122,255,0.3);
+      flex-shrink: 0;
     }
     .info .name {
       font-size: 17px;
@@ -1065,7 +1027,8 @@
       background: rgba(255,255,255,0.2);
       transform: scale(0.95);
     }
-    .chat-content;
+    .chat-content {
+      flex: 1;
       padding: 20px;
       overflow-y: auto;
       display: flex;
@@ -1117,7 +1080,6 @@
       border-bottom-left-radius: 4px;
       border: 1px solid rgba(255,255,255,0.15);
     }
-    /* 系统公告金色特效 */
     .admin-glow {
       background: linear-gradient(135deg, #ff0844 0%, #ffb199 100%) !important;
       color: #fff !important;
@@ -1127,7 +1089,6 @@
       animation: pulse 2s infinite;
       text-shadow: 0 1px 3px rgba(0,0,0,0.5);
     }
-    /* 作者粉红呼吸发光气泡 */
     .author-glow {
       background: linear-gradient(135deg, #ff0080, #7928ca) !important;
       color: #fff !important;
@@ -1248,7 +1209,7 @@
       border: 1px solid rgba(0,122,255,0.3);
     }
 
-    /* ==================== 🎵 音乐播放器修复 ==================== */
+    /* ==================== 🎵 音乐播放器 ==================== */
     .music-fab {
       position: fixed;
       bottom: 90px;
@@ -1262,7 +1223,7 @@
       align-items: center;
       font-size: 24px;
       cursor: pointer;
-      z-index: 2147483647; /* 极限最高层级 */
+      z-index: 2147483647;
       box-shadow: 0 10px 25px rgba(255,0,128,0.4);
       transition: transform 0.3s;
       user-select: none;
@@ -1270,7 +1231,6 @@
     .music-fab:active {
       transform: scale(0.9);
     }
-
     #musicPlayer {
       position: fixed;
       bottom: -100%;
@@ -1372,7 +1332,6 @@
   </style>
 </head>
 <body>
-  <!-- 登录页 -->
   <div id="loginScreen">
     <div class="login-box">
       <h1>Chat</h1>
@@ -1389,11 +1348,10 @@
     </div>
   </div>
 
-  <!-- 大厅 -->
   <div id="lobbyScreen">
     <div class="lobby-header">
       <span>聊天大厅</span>
-      <div style="display:flex;align-items:center;gap:15px;">
+      <div>
         <span id="myNameDisplay" style="font-size:14px;color:#00c6ff;font-weight:700;"></span>
         <button class="logout-btn" onclick="deleteAccount()">注销</button>
       </div>
@@ -1408,7 +1366,6 @@
     <div class="group-list" id="myGroupList"></div>
   </div>
 
-  <!-- 聊天 -->
   <div id="chatScreen">
     <div class="header">
       <div class="header-left">
@@ -1424,52 +1381,40 @@
     </div>
   </div>
 
-  <!-- 成员操作弹窗 -->
   <div id="actionModal">
     <div class="action-box">
       <h3>管理 <span id="modalTargetName" style="color:#00c6ff;"></span></h3>
-      <button id="btnSetAdmin"
-        style="background:rgba(0,122,255,0.15);color:#0a84ff;border:1px solid rgba(0,122,255,0.3);"></button>
-      <button id="btnMute"
-        style="background:rgba(255,149,0,0.15);color:#ff9500;border:1px solid rgba(255,149,0,0.3);"></button>
-      <button onclick="kickTarget()"
-        style="background:rgba(255,59,48,0.15);color:#ff453a;border:1px solid rgba(255,59,48,0.3);">踢出群聊</button>
+      <button id="btnSetAdmin" style="background:rgba(0,122,255,0.15);color:#0a84ff;border:1px solid rgba(0,122,255,0.3);"></button>
+      <button id="btnMute" style="background:rgba(255,149,0,0.15);color:#ff9500;border:1px solid rgba(255,149,0,0.3);"></button>
+      <button onclick="kickTarget()" style="background:rgba(255,59,48,0.15);color:#ff453a;border:1px solid rgba(255,59,48,0.3);">踢出群聊</button>
       <button class="btn-close" onclick="closeActionModal()">取消</button>
     </div>
   </div>
 
-  <!-- 群设置弹窗 -->
   <div id="settingsModal">
     <div class="modal-box">
       <h3>群聊设置</h3>
-      <div
-        style="background:rgba(0,0,0,0.4);padding:10px;border-radius:14px;margin-bottom:15px;text-align:center;font-size:14px;border:1px solid rgba(255,255,255,0.05);">
-        群号：<strong id="displayGroupId"
-          style="color:#00c6ff;font-size:18px;text-shadow:0 0 10px rgba(0,198,255,0.5);"></strong>
-        <button onclick="copyGroupId()"
-          style="width:auto;padding:5px 10px;margin:5px auto 0;display:block;background:rgba(0,122,255,0.2);color:#0a84ff;font-size:12px;border-radius:6px;border:1px solid rgba(0,122,255,0.3);">一键复制</button>
+      <div style="background:rgba(0,0,0,0.4);padding:10px;border-radius:14px;margin-bottom:15px;text-align:center;font-size:14px;border:1px solid rgba(255,255,255,0.05);">
+        群号：<strong id="displayGroupId" style="color:#00c6ff;font-size:18px;text-shadow:0 0 10px rgba(0,198,255,0.5);"></strong>
+        <button onclick="copyGroupId()" style="width:auto;padding:5px 10px;margin:5px auto 0;display:block;background:rgba(0,122,255,0.2);color:#0a84ff;font-size:12px;border-radius:6px;border:1px solid rgba(0,122,255,0.3);">一键复制</button>
       </div>
       <div class="member-list">
         <h4 style="margin-bottom:10px;color:#fff;font-size:15px;text-align:left;">群成员管理</h4>
         <div id="memberList"></div>
       </div>
-      <button onclick="leaveGroup()"
-        style="background:rgba(255,59,48,0.15);color:#ff453a;border:1px solid rgba(255,59,48,0.3);margin-top:20px;">退出群聊</button>
+      <button onclick="leaveGroup()" style="background:rgba(255,59,48,0.15);color:#ff453a;border:1px solid rgba(255,59,48,0.3);margin-top:20px;">退出群聊</button>
       <button class="btn-close" onclick="closeSettings()">关闭</button>
     </div>
   </div>
 
-  <!-- 音乐播放器 -->
   <div class="music-fab" id="musicFab">🎵</div>
   <div id="musicPlayer">
     <div class="music-header">
       <span>🎵 全网音乐搜索</span>
-      <button class="music-close"
-        onclick="document.getElementById('musicPlayer').classList.remove('show')">✕</button>
+      <button class="music-close" onclick="document.getElementById('musicPlayer').classList.remove('show')">✕</button>
     </div>
     <div class="search-box">
-      <input type="text" id="musicSearchInput" placeholder="输入歌名或歌手..."
-        onkeypress="if(event.key==='Enter') searchMusic()">
+      <input type="text" id="musicSearchInput" placeholder="输入歌名或歌手..." onkeypress="if(event.key==='Enter') searchMusic()">
       <button onclick="searchMusic()">搜索</button>
     </div>
     <div class="song-list" id="songList">
