@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <title>极光聊天</title>
+  <title>极光聊天 · 玩家端</title>
   <script>
     if (localStorage.getItem('chat_username')) {
       document.documentElement.style.visibility = 'hidden';
@@ -33,8 +33,9 @@
     let banListenerBound = false;
     let heartbeatTimer = null;
     let onlineUsers = []; 
-    let myLevel = 1;
-    let myTitle = "";
+    let globalMuteUntil = 0; 
+
+    let allUsersData = {};
 
     let BAD_WORDS = ["傻逼", "操你妈", "妈的", "去死", "煞笔", "脑残", "婊子", "杂种", "龟儿子", "狗日", "贱人", "王八蛋", "滚蛋", "尼玛", "草泥马", "沙比", "玛德", "卧槽", "我擦", "特么", "特么的", "法克", "fuck", "shit", "bitch", "asshole", "bastard", "dick", "pussy", "cunt", "motherfucker"];
 
@@ -47,6 +48,26 @@
       return dId;
     }
     myDeviceId = getDeviceId();
+
+    function listenGlobalMute() {
+      onValue(ref(db, 'global_muted/' + myName), (snap) => {
+        if (snap.exists()) {
+          globalMuteUntil = snap.val();
+        } else {
+          globalMuteUntil = 0;
+        }
+      });
+    }
+
+    function listenAllUsersData() {
+      onValue(ref(db, 'users'), (snap) => {
+        if (snap.exists()) {
+          allUsersData = snap.val();
+        } else {
+          allUsersData = {};
+        }
+      });
+    }
 
     function initOnlineStatus() {
       const userStatusRef = ref(db, 'status/' + myName);
@@ -195,12 +216,12 @@
           if (snapshot.exists()) {
             myName = savedUser;
             isAuthor = !!snapshot.val().isAuthor;
-            myLevel = snapshot.val().level || 1;
-            myTitle = snapshot.val().title || "";
             update(ref(db, 'users/' + savedUser), { deviceId: myDeviceId }).catch(() => {});
             document.documentElement.style.visibility = 'visible';
             initOnlineStatus(); 
             listenWarnings();
+            listenGlobalMute();
+            listenAllUsersData();
             showScreen('lobbyScreen');
             renderLobby();
             return;
@@ -263,10 +284,10 @@
         if (snapshot.exists()) {
           myName = savedUser;
           isAuthor = !!snapshot.val().isAuthor;
-          myLevel = snapshot.val().level || 1;
-          myTitle = snapshot.val().title || "";
           initOnlineStatus();
           listenWarnings();
+          listenGlobalMute();
+          listenAllUsersData();
           showScreen('lobbyScreen');
           renderLobby();
         } else {
@@ -283,6 +304,7 @@
       document.getElementById('chatScreen').style.display = 'none';
       document.getElementById('plazaScreen').style.display = 'none';
       document.getElementById('privateChatScreen').style.display = 'none';
+      document.getElementById('privateListScreen').style.display = 'none';
       document.getElementById(id).style.display = 'flex';
     }
 
@@ -307,12 +329,12 @@
             if (snapshot.val().password === encryptedPass) {
               myName = user;
               isAuthor = !!snapshot.val().isAuthor;
-              myLevel = snapshot.val().level || 1;
-              myTitle = snapshot.val().title || "";
               localStorage.setItem('chat_username', myName);
               update(ref(db, 'users/' + user), { deviceId: myDeviceId });
               initOnlineStatus();
               listenWarnings();
+              listenGlobalMute();
+              listenAllUsersData();
               showScreen('lobbyScreen');
               renderLobby();
             } else {
@@ -333,11 +355,11 @@
                   }).then(() => {
                     myName = user;
                     isAuthor = false;
-                    myLevel = 1;
-                    myTitle = "";
                     localStorage.setItem('chat_username', myName);
                     initOnlineStatus();
                     listenWarnings();
+                    listenGlobalMute();
+                    listenAllUsersData();
                     showScreen('lobbyScreen');
                     renderLobby();
                   });
@@ -360,7 +382,6 @@
       });
     };
 
-    // ==================== 大厅 ====================
     let lobbyListenerBound = false;
     function renderLobby() {
       document.getElementById('myNameDisplay').innerText = myName + (isAuthor ? ' 👑' : '');
@@ -405,7 +426,85 @@
       });
     }
 
-    // ==================== 私聊功能 ====================
+    // ==================== 私信列表功能 ====================
+    let privateListListener = null;
+    let myPrivateRooms = {}; // 存储当前用户的私信房间
+
+    window.goPrivateList = function() {
+      showScreen('privateListScreen');
+      if (privateListListener) return;
+
+      privateListListener = onValue(ref(db, 'private_msgs'), (snapshot) => {
+        myPrivateRooms = {};
+        if (snapshot.exists()) {
+          snapshot.forEach(roomSnap => {
+            const roomId = roomSnap.key;
+            const users = roomId.split('_');
+            // 如果房间包含当前玩家
+            if (users.includes(myName)) {
+              const msgs = roomSnap.val();
+              let lastMsg = null;
+              let lastTime = 0;
+              // 找到最后一条消息
+              for (let key in msgs) {
+                if (msgs[key].time > lastTime) {
+                  lastTime = msgs[key].time;
+                  lastMsg = msgs[key];
+                }
+              }
+              const otherUser = users[0] === myName ? users[1] : users[0];
+              myPrivateRooms[roomId] = {
+                roomId: roomId,
+                otherUser: otherUser,
+                lastText: lastMsg ? lastMsg.text : "",
+                lastTime: lastTime
+              };
+            }
+          });
+        }
+        renderPrivateList();
+      });
+    };
+
+    function renderPrivateList() {
+      const listEl = document.getElementById('privateListContent');
+      listEl.innerHTML = '';
+      const roomsArray = Object.values(myPrivateRooms).sort((a, b) => b.lastTime - a.lastTime);
+
+      if (roomsArray.length === 0) {
+        listEl.innerHTML = '<div style="text-align:center;color:rgba(255,255,255,0.5);margin-top:50px;font-size:14px;">暂无私信记录</div>';
+        return;
+      }
+
+      roomsArray.forEach(room => {
+        const div = document.createElement('div');
+        div.className = 'chat-item';
+        // 截断长消息
+        let preview = room.lastText.length > 15 ? room.lastText.substring(0, 15) + '...' : room.lastText;
+        
+        div.innerHTML = `
+          <div class="avatar" style="background:linear-gradient(135deg,#00c6ff,#0072ff);">💬</div>
+          <div class="info" style="flex:1; overflow:hidden;">
+            <div class="name" style="display:flex; justify-content:space-between;">
+              <span>${room.otherUser}</span>
+              <span style="font-size:11px; color:#888; font-weight:normal;">${new Date(room.lastTime).toLocaleTimeString()}</span>
+            </div>
+            <div style="font-size:12px; color:rgba(255,255,255,0.5); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:4px;">
+              ${preview}
+            </div>
+          </div>
+        `;
+        div.onclick = () => startPrivateChat(room.otherUser);
+        listEl.appendChild(div);
+      });
+    }
+
+    window.closePrivateList = function() {
+      if (privateListListener) { privateListListener(); privateListListener = null; }
+      showScreen('lobbyScreen');
+    };
+
+    // ==================== 单人私聊功能 ====================
     let privateMsgListener = null;
     window.startPrivateChat = function(targetName) {
       if (targetName === myName) return alert("不能和自己私聊哦！");
@@ -437,26 +536,30 @@
     window.closePrivateChat = function() {
       if (privateMsgListener) { privateMsgListener(); privateMsgListener = null; }
       currentPrivateChatUser = "";
-      showScreen('lobbyScreen');
+      // 如果是从私信列表点进来的，返回列表；否则返回大厅
+      if (document.getElementById('privateListScreen').style.display === 'flex') {
+        showScreen('privateListScreen');
+      } else {
+        showScreen('lobbyScreen');
+      }
     };
 
     window.sendPrivateMsg = function() {
       const input = document.getElementById('privateMsgInput');
       const text = input.value.trim();
       if (!text) return;
-      
-      get(ref(db, 'global_muted/' + myName)).then(snap => {
-        if (snap.exists() && snap.val() > Date.now()) {
-          return alert(`🚫 你已被作者全网禁言，无法发送私信！`);
-        }
-        const roomId = [myName, currentPrivateChatUser].sort().join('_');
-        push(ref(db, `private_msgs/${roomId}`), {
-          sender: myName,
-          text: text,
-          time: Date.now()
-        });
-        input.value = '';
+
+      if (globalMuteUntil > Date.now()) {
+        return alert(`🚫 你已被作者全网禁言，无法发送私信！剩余 ${formatRemain(globalMuteUntil - Date.now())}`);
+      }
+
+      const roomId = [myName, currentPrivateChatUser].sort().join('_');
+      push(ref(db, `private_msgs/${roomId}`), {
+        sender: myName,
+        text: text,
+        time: Date.now()
       });
+      input.value = '';
     };
 
     window.handlePrivateEnter = function(e) {
@@ -492,20 +595,21 @@
       const text = input.value.trim();
       if (!text) return;
 
-      get(ref(db, 'global_muted/' + myName)).then(snap => {
-        if (snap.exists() && snap.val() > Date.now()) {
-          return alert(`🚫 你已被作者全网禁言，无法在广场发言！`);
-        }
-        push(ref(db, 'plaza'), {
-          sender: myName,
-          text: text,
-          time: Date.now(),
-          level: myLevel,
-          title: myTitle,
-          isAuthor: isAuthor
-        });
-        input.value = '';
+      if (globalMuteUntil > Date.now()) {
+        return alert(`🚫 你已被作者全网禁言，无法在广场发言！剩余 ${formatRemain(globalMuteUntil - Date.now())}`);
+      }
+
+      const myData = allUsersData[myName] || { level: 1, title: "", isAuthor: false };
+      
+      push(ref(db, 'plaza'), {
+        sender: myName,
+        text: text,
+        time: Date.now(),
+        level: myData.level || 1,
+        title: myData.title || "",
+        isAuthor: isAuthor
       });
+      input.value = '';
     };
 
     window.handlePlazaEnter = function (e) {
@@ -572,6 +676,11 @@
       get(ref(db, 'group_info/' + gid)).then((snap) => {
         if (snap.exists()) {
           const info = snap.val();
+
+          if (info.kicked && info.kicked[myName]) {
+            return alert("❌ 你已被踢出该群，无法重新加入！");
+          }
+
           if (!myGroups.includes(gid)) myGroups.push(gid);
           localStorage.setItem('chat_mygroups', JSON.stringify(myGroups));
 
@@ -635,6 +744,15 @@
       const unsubInfo = onValue(ref(db, 'group_info/' + gid), (snap) => {
         if (snap.exists()) {
           currentGroupInfo = snap.val();
+          
+          if (currentGroupInfo.kicked && currentGroupInfo.kicked[myName]) {
+            alert("🚫 你已被踢出该群聊！");
+            myGroups = myGroups.filter(id => id !== gid);
+            localStorage.setItem('chat_mygroups', JSON.stringify(myGroups));
+            goLobby();
+            return;
+          }
+
           document.getElementById('displayGroupName').innerText = currentGroupInfo.name || ("群 " + gid);
           
           const banner = document.getElementById('muteAllBanner');
@@ -650,10 +768,6 @@
             document.getElementById('msgInput').placeholder = "输入消息...";
             document.getElementById('msgInput').disabled = false;
             document.getElementById('sendBtn').style.opacity = '1';
-          }
-
-          if (document.getElementById('settingsModal').style.display === 'flex') {
-            document.getElementById('muteAllToggle').checked = !!currentGroupInfo.muteAll;
           }
         } else {
           if (currentGroupId === gid) {
@@ -676,7 +790,7 @@
           snapshot.forEach((childSnapshot) => {
             const msgId = childSnapshot.key;
             const msg = childSnapshot.val();
-            addMessageToUI(msgId, msg.sender, msg.text, msg.isAuthorMsg, msg.time, msg.level, msg.title);
+            addMessageToUI(msgId, msg.sender, msg.text, msg.isAuthorMsg, msg.time);
           });
         }
       });
@@ -703,50 +817,46 @@
         return alert("🚫 群主开启了全员禁言，你无法发言！");
       }
 
-      get(ref(db, 'global_muted/' + myName)).then(snap => {
-        if (snap.exists() && snap.val() > Date.now()) {
-          return alert(`🚫 你已被作者全网禁言！`);
-        }
+      if (globalMuteUntil > Date.now()) {
+        return alert(`🚫 你已被作者全网禁言，无法发言！剩余 ${formatRemain(globalMuteUntil - Date.now())}`);
+      }
 
-        let hasBadWord = false;
-        for (let w of BAD_WORDS) {
-          if (text.toLowerCase().includes(w.toLowerCase())) {
-            hasBadWord = true;
-            break;
-          }
+      let hasBadWord = false;
+      for (let w of BAD_WORDS) {
+        if (text.toLowerCase().includes(w.toLowerCase())) {
+          hasBadWord = true;
+          break;
         }
-        if (hasBadWord) {
-          const violationRef = ref(db, 'violations/' + myName);
-          get(violationRef).then(snap => {
-            const currentCount = snap.exists() ? snap.val().count : 0;
-            set(violationRef, { count: currentCount + 1, lastTime: Date.now(), lastWord: text });
-          });
-        }
+      }
+      if (hasBadWord) {
+        const violationRef = ref(db, 'violations/' + myName);
+        get(violationRef).then(snap => {
+          const currentCount = snap.exists() ? snap.val().count : 0;
+          set(violationRef, { count: currentCount + 1, lastTime: Date.now(), lastWord: text });
+        });
+      }
 
-        get(ref(db, 'banned/' + myName)).then((snap) => {
-          if (snap.exists()) return alert("🚫 你已被全网封杀，无法发言！");
+      get(ref(db, 'banned/' + myName)).then((snap) => {
+        if (snap.exists()) return alert("🚫 你已被全网封杀，无法发言！");
 
-          get(ref(db, `groups/${currentGroupId}/muted/${myName}`)).then((muteSnap) => {
-            if (muteSnap.exists()) {
-              const until = muteSnap.val();
-              if (until > Date.now()) {
-                const remain = until - Date.now();
-                return alert(`🚫 你已被群主禁言，剩余 ${formatRemain(remain)}！`);
-              } else {
-                remove(ref(db, `groups/${currentGroupId}/muted/${myName}`)).catch(() => {});
-              }
+        get(ref(db, `groups/${currentGroupId}/muted/${myName}`)).then((muteSnap) => {
+          if (muteSnap.exists()) {
+            const until = muteSnap.val();
+            if (until > Date.now()) {
+              const remain = until - Date.now();
+              return alert(`🚫 你已被禁言，剩余 ${formatRemain(remain)}！`);
+            } else {
+              remove(ref(db, `groups/${currentGroupId}/muted/${myName}`)).catch(() => {});
             }
+          }
 
-            push(ref(db, `groups/${currentGroupId}/messages`), {
-              sender: myName,
-              text: text,
-              time: Date.now(),
-              isAuthorMsg: isAuthor,
-              level: myLevel,
-              title: myTitle
-            });
-            input.value = '';
+          push(ref(db, `groups/${currentGroupId}/messages`), {
+            sender: myName,
+            text: text,
+            time: Date.now(),
+            isAuthorMsg: isAuthor
           });
+          input.value = '';
         });
       });
     };
@@ -755,7 +865,7 @@
       if (e.key === 'Enter') sendMsg();
     };
 
-    function addMessageToUI(msgId, sender, text, isAuthorMsg, time, level, title) {
+    function addMessageToUI(msgId, sender, text, isAuthorMsg, time) {
       if (!text) return;
 
       const isMe = (sender === myName);
@@ -769,9 +879,13 @@
       div.className = `msg ${isMe ? 'mine' : 'theirs'}`;
       div.dataset.msgId = msgId;
 
+      const senderData = allUsersData[sender] || {};
+      const level = senderData.level || 1;
+      const title = senderData.title || "";
+
       let nameTag = sender;
       let titleTag = title ? `<span style="background:linear-gradient(90deg,#ffd700,#ff8c00);color:#000;padding:2px 6px;border-radius:6px;font-size:10px;margin-left:5px;margin-right:5px;">${title}</span>` : '';
-      let lvlTag = `<span style="font-size:10px; color:#888; margin-right:5px;">Lv.${level || 1}</span>`;
+      let lvlTag = `<span style="font-size:10px; color:#888; margin-right:5px;">Lv.${level}</span>`;
 
       if (isBoss) nameTag = `${senderOnline}${lvlTag}<span style="color:#ff3b30;font-weight:bold;">👑群主</span> ${sender}`;
       else if (isAdmin) nameTag = `${senderOnline}${lvlTag}<span style="color:#f39c12;font-weight:bold;">🛡️管理员</span> ${sender}`;
@@ -802,97 +916,123 @@
       const iAmAdmin = (currentGroupInfo.admins && currentGroupInfo.admins.includes(myName));
       
       let canRecall = false;
-      if (!["📢 系统公告", "📢 系统提示", "👑 作者(隐身)"].includes(sender)) {
-        if (isMe && (Date.now() - time <= 120000)) canRecall = true;
-        else if ((iAmOwner || iAmAdmin || isAuthor) && !isFromAuthor) canRecall = true; 
+      if (!["📢 系统公告", "📢 系统提示", "👑 作者(隐身)"].includes(sender) && !isFromAuthor) {
+        if (isMe) canRecall = true;
+        else if (iAmOwner || iAmAdmin || isAuthor) canRecall = true;
       }
 
-      let touchTimer;
-      let isMoved = false;
-      const isSysOrAuthor = ["📢 系统公告", "📢 系统提示", "👑 作者(隐身)"].includes(sender) || isFromAuthor;
+      const isSys = ["📢 系统公告", "📢 系统提示"].includes(sender);
+      if (isSys) {
+        const box = document.getElementById('chatContent');
+        box.appendChild(div);
+        setTimeout(() => { box.scrollTop = box.scrollHeight; }, 50);
+        return;
+      }
 
-      if (canRecall || !isSysOrAuthor) {
-        div.addEventListener('touchstart', (e) => {
-          isMoved = false;
-          touchTimer = setTimeout(() => {
-            if (!isMoved) {
-              showMessageMenu(sender, msgId, canRecall);
+      let touchTimer = null;
+      let longPressed = false;
+
+      const clearTouchTimer = () => {
+        if (touchTimer) { clearTimeout(touchTimer); touchTimer = null; }
+      };
+
+      div.addEventListener('click', (e) => {
+        if (longPressed) { longPressed = false; return; }
+        if (isMe) return; 
+        
+        actionTargetName = sender;
+        document.getElementById('modalTargetName').innerText = sender;
+        
+        const pmBtn = document.getElementById('btnStartPM');
+        pmBtn.style.display = 'block';
+        pmBtn.onclick = () => { closeActionModal(); startPrivateChat(sender); };
+
+        const violationBtn = document.getElementById('manualViolationBtn');
+        violationBtn.style.display = 'block';
+
+        const iAmOwner = (myName === currentGroupInfo.creator);
+        const iAmAdmin = (currentGroupInfo.admins && currentGroupInfo.admins.includes(myName));
+        const isPrivileged = iAmOwner || iAmAdmin || isAuthor;
+
+        if (isPrivileged) {
+          const isTargetAdmin = currentGroupInfo.admins.includes(sender);
+          const btnSetAdmin = document.getElementById('btnSetAdmin');
+          btnSetAdmin.style.display = 'block';
+          btnSetAdmin.innerText = isTargetAdmin ? '撤销管理员' : '设为管理员';
+          btnSetAdmin.onclick = isTargetAdmin ? removeAdminTarget : addAdminTarget;
+
+          get(ref(db, `groups/${currentGroupId}/muted/${sender}`)).then(muteSnap => {
+            const btnMute = document.getElementById('btnMute');
+            btnMute.style.display = 'block';
+            if (muteSnap.exists() && muteSnap.val() > Date.now()) {
+              btnMute.innerText = '解除禁言';
+              btnMute.style.background = 'rgba(52,199,89,0.2)';
+              btnMute.style.color = '#34c759';
+              btnMute.onclick = unmuteTarget;
+            } else {
+              btnMute.innerText = '禁言该用户';
+              btnMute.style.background = 'rgba(255,149,0,0.2)';
+              btnMute.style.color = '#ff9500';
+              btnMute.onclick = muteTarget;
             }
-          }, 800);
-        }, { passive: true });
+          });
 
-        div.addEventListener('touchmove', () => {
-          isMoved = true;
-          if (touchTimer) clearTimeout(touchTimer);
-        }, { passive: true });
+          const kickBtn = document.getElementById('kickBtn');
+          if (sender !== currentGroupInfo.creator && sender !== myName) {
+            kickBtn.style.display = 'block';
+          } else {
+            kickBtn.style.display = 'none';
+          }
+        } else {
+          document.getElementById('btnSetAdmin').style.display = 'none';
+          document.getElementById('btnMute').style.display = 'none';
+          document.getElementById('kickBtn').style.display = 'none';
+        }
+        
+        document.getElementById('actionModal').style.display = 'flex';
+      });
 
-        div.addEventListener('touchend', () => {
-          if (touchTimer) clearTimeout(touchTimer);
-        });
+      div.addEventListener('touchstart', (e) => {
+        longPressed = false;
+        clearTouchTimer();
+        touchTimer = setTimeout(() => {
+          longPressed = true;
+          if (canRecall) {
+            if (confirm(isMe ? "确定撤回这条消息吗？" : `作为管理员/群主，确定撤回【${sender}】的消息吗？`)) {
+              remove(ref(db, `groups/${currentGroupId}/messages/${msgId}`));
+            }
+          } else {
+            alert("你没有权限撤回此消息！");
+          }
+        }, 800);
+      }, { passive: true });
 
-        div.addEventListener('contextmenu', (e) => {
-          e.preventDefault();
-          showMessageMenu(sender, msgId, canRecall);
-        });
-      }
+      div.addEventListener('touchmove', () => {
+        clearTouchTimer();
+      }, { passive: true });
+
+      div.addEventListener('touchend', () => {
+        clearTouchTimer();
+      }, { passive: true });
+
+      div.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        if (canRecall) {
+          if (confirm(isMe ? "确定撤回这条消息吗？" : `作为管理员/群主，确定撤回【${sender}】的消息吗？`)) {
+            remove(ref(db, `groups/${currentGroupId}/messages/${msgId}`));
+          }
+        } else {
+          alert("你没有权限撤回此消息！");
+        }
+      });
 
       const box = document.getElementById('chatContent');
       box.appendChild(div);
       setTimeout(() => { box.scrollTop = box.scrollHeight; }, 50);
     }
 
-    function showMessageMenu(sender, msgId, canRecall) {
-      const isMe = (sender === myName);
-      
-      if (canRecall) {
-        if (confirm(isMe ? `确定要撤回这条消息吗？` : `确定要撤回【${sender}】的消息吗？`)) {
-          remove(ref(db, `groups/${currentGroupId}/messages/${msgId}`));
-        }
-        return;
-      }
-
-      if (!isMe) {
-        const action = prompt(`对【${sender}】的操作：\n输入 1：发私信\n输入 2：举报他\n输入 3：取消`);
-        if (action === "1") {
-          startPrivateChat(sender);
-        } else if (action === "2") {
-          const reason = prompt(`🚨 举报玩家【${sender}】\n请输入举报原因：`);
-          if (reason !== null) {
-            push(ref(db, 'reports'), {
-              reporter: myName,
-              target: sender,
-              reason: reason || "未填写原因",
-              time: Date.now()
-            }).then(() => {
-              alert("✅ 举报已提交给作者！");
-            });
-          }
-        }
-      }
-    }
-
     window.showActionModal = function (targetName) {
       actionTargetName = targetName;
-      const isTargetAdmin = currentGroupInfo.admins.includes(targetName);
-      const btnSetAdmin = document.getElementById('btnSetAdmin');
-      btnSetAdmin.innerText = isTargetAdmin ? '撤销管理员' : '设为管理员';
-      btnSetAdmin.onclick = isTargetAdmin ? removeAdminTarget : addAdminTarget;
-
-      get(ref(db, `groups/${currentGroupId}/muted/${targetName}`)).then(muteSnap => {
-        const btnMute = document.getElementById('btnMute');
-        if (muteSnap.exists() && muteSnap.val() > Date.now()) {
-          btnMute.innerText = '解除禁言';
-          btnMute.style.background = 'rgba(52,199,89,0.2)';
-          btnMute.style.color = '#34c759';
-          btnMute.onclick = unmuteTarget;
-        } else {
-          btnMute.innerText = '禁言该用户';
-          btnMute.style.background = 'rgba(255,149,0,0.2)';
-          btnMute.style.color = '#ff9500';
-          btnMute.onclick = muteTarget;
-        }
-      });
-
       document.getElementById('modalTargetName').innerText = targetName;
       document.getElementById('actionModal').style.display = 'flex';
     };
@@ -938,8 +1078,35 @@
 
     window.kickTarget = function () {
       if (!confirm(`⚠️ 确定将【${actionTargetName}】踢出群聊吗？`)) return;
-      set(ref(db, `groups/${currentGroupId}/kicked/${actionTargetName}`), true).then(() => {
-        push(ref(db, `groups/${currentGroupId}/messages`), { sender: "📢 系统提示", text: `${actionTargetName} 已被踢出`, time: Date.now() });
+      const gid = currentGroupId;
+      const target = actionTargetName;
+      get(ref(db, 'group_info/' + gid)).then(snap => {
+        if (!snap.exists()) return;
+        const info = snap.val();
+        const updates = {};
+        const members = (info.members || []).filter(m => m !== target);
+        updates[`group_info/${gid}/members`] = members;
+        const admins = (info.admins || []).filter(a => a !== target);
+        updates[`group_info/${gid}/admins`] = admins;
+        updates[`group_info/${gid}/kicked/${target}`] = true;
+        update(ref(db), updates).then(() => {
+          push(ref(db, `groups/${gid}/messages`), { sender: "📢 系统提示", text: `${target} 已被踢出`, time: Date.now() });
+          closeActionModal();
+        });
+      });
+    };
+
+    window.manualViolation = function () {
+      if (!actionTargetName) return;
+      const reason = prompt(`请输入举报【${actionTargetName}】的原因：`);
+      if (reason === null) return;
+      push(ref(db, 'reports'), {
+        reporter: myName,
+        target: actionTargetName,
+        reason: reason || "未填写原因",
+        time: Date.now()
+      }).then(() => {
+        alert("✅ 举报已提交给作者！");
         closeActionModal();
       });
     };
@@ -1015,7 +1182,6 @@
       navigator.clipboard.writeText(currentGroupId).then(() => alert("群号已复制！")).catch(() => {});
     };
 
-    // ==================== 🎵 音乐播放器 ====================
     let audioContext = null;
     let analyser = null;
     let source = null;
@@ -1259,12 +1425,11 @@
     document.addEventListener('DOMContentLoaded', initMusicPlayer);
   </script>
   <style>
-    /* 客户端样式 */
     * { margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; -webkit-tap-highlight-color: transparent; }
     body { background: #000; color: #fff; height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; position: relative; }
     body::before { content: ''; position: fixed; top: -50vh; left: -50vw; width: 200vw; height: 200vh; background: radial-gradient(circle at 20% 30%, rgba(100,200,255,0.4) 0%, transparent 40%), radial-gradient(circle at 80% 70%, rgba(255,100,200,0.4) 0%, transparent 40%); animation: spin 20s linear infinite; filter: blur(40px); z-index: -1; }
     @keyframes spin { 100% { transform: rotate(360deg); } }
-    #loginScreen, #lobbyScreen, #chatScreen, #plazaScreen, #privateChatScreen { display: none; flex: 1; flex-direction: column; height: 100%; overflow: hidden; }
+    #loginScreen, #lobbyScreen, #chatScreen, #plazaScreen, #privateChatScreen, #privateListScreen { display: none; flex: 1; flex-direction: column; height: 100%; overflow: hidden; }
     #loginScreen { justify-content: center; align-items: center; }
     .login-box { background: rgba(255,255,255,0.05); backdrop-filter: blur(30px); -webkit-backdrop-filter: blur(30px); padding: 40px 30px; border-radius: 24px; width: 85%; max-width: 340px; box-shadow: 0 30px 60px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.2); border-top-color: rgba(255,255,255,0.5); display: flex; flex-direction: column; }
     .login-box h1 { text-align: center; margin-bottom: 30px; font-size: 32px; font-weight: 800; letter-spacing: -1px; color: #fff; text-shadow: 0 0 20px rgba(255,255,255,0.3); }
@@ -1338,7 +1503,6 @@
     .audio-controls { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
     audio { width: 100%; height: 40px; filter: invert(1) hue-rotate(180deg); border-radius: 10px; outline: none; }
 
-    /* 广场样式 */
     .plaza-header { background: rgba(0,0,0,0.5); border-bottom: 1px solid rgba(255,0,255,0.3); padding: 20px; display: flex; justify-content: space-between; align-items: center; }
     .plaza-msg { background: rgba(255,255,255,0.05); border-radius: 12px; padding: 15px; border-left: 3px solid #ff00ff; margin-bottom: 10px;}
     .plaza-text { font-size: 15px; color: #ddd; line-height: 1.5; word-break: break-all; }
@@ -1365,8 +1529,9 @@
     </div>
     
     <div class="lobby-btns">
-      <button class="btn-create" onclick="createGroup()">➕ 创建新群聊</button>
-      <button class="btn-plaza" onclick="goPlaza()">📢 全服广场</button>
+      <button class="btn-create" onclick="createGroup()">➕ 创建群聊</button>
+      <button class="btn-plaza" onclick="goPlaza()">📢 全球广场</button>
+      <button onclick="goPrivateList()" style="border-color:rgba(0,198,255,0.5);color:#00c6ff;background:rgba(0,198,255,0.2);">💬 我的私信</button>
     </div>
     
     <div class="btn-join-box">
@@ -1376,15 +1541,27 @@
     <div class="group-list" id="myGroupList"></div>
   </div>
 
+  <!-- 私信列表页 -->
+  <div id="privateListScreen">
+    <div class="header">
+      <div class="header-left">
+        <button class="leave-btn" onclick="closePrivateList()">〈 返回大厅</button>
+        <h1 style="text-shadow:0 0 10px rgba(0,198,255,0.5);">我的私信</h1>
+      </div>
+    </div>
+    <div class="chat-content" id="privateListContent" style="padding:15px; gap:10px;">
+      <!-- 私信列表 -->
+    </div>
+  </div>
+
   <div id="plazaScreen">
     <div class="header plaza-header">
       <div class="header-left">
         <button class="leave-btn" onclick="closePlaza()" style="color:#ff00ff;">〈 返回大厅</button>
-        <h1 style="text-shadow:0 0 10px rgba(255,0,255,0.5);">📢 全服广场</h1>
+        <h1 style="text-shadow:0 0 10px rgba(255,0,255,0.5);">📢 全球广场</h1>
       </div>
     </div>
     <div class="chat-content" id="plazaContent" style="padding:15px; gap:10px;">
-      <!-- 广场动态列表 -->
     </div>
     <div class="input-area">
       <input type="text" id="plazaInput" placeholder="发一条全服动态 (支持表情)..." onkeypress="handlePlazaEnter(event)">
@@ -1392,11 +1569,10 @@
     </div>
   </div>
 
-  <!-- 私聊界面 -->
   <div id="privateChatScreen">
     <div class="header" style="border-bottom:1px solid rgba(0,198,255,0.3);">
       <div class="header-left">
-        <button class="leave-btn" onclick="closePrivateChat()" style="color:#00c6ff;">〈 返回大厅</button>
+        <button class="leave-btn" onclick="closePrivateChat()" style="color:#00c6ff;">〈 返回</button>
         <h1 id="privateChatName" style="text-shadow:0 0 10px rgba(0,198,255,0.5);">私聊</h1>
       </div>
     </div>
@@ -1427,13 +1603,17 @@
     </div>
   </div>
 
+  <!-- 聊天消息点击弹窗（包含私信、管理、撤回提示等） -->
   <div id="actionModal">
     <div class="action-box">
-      <h3>管理 <span id="modalTargetName" style="color:#00c6ff;"></span></h3>
-      <button id="btnSetAdmin" style="background:rgba(0,122,255,0.15);color:#0a84ff;border:1px solid rgba(0,122,255,0.3);"></button>
-      <button id="btnMute" style="background:rgba(255,149,0,0.15);color:#ff9500;border:1px solid rgba(255,149,0,0.3);"></button>
-      <button onclick="kickTarget()" style="background:rgba(255,59,48,0.15);color:#ff453a;border:1px solid rgba(255,59,48,0.3);">踢出群聊</button>
-      <button onclick="startPrivateChat(actionTargetName)" style="background:linear-gradient(135deg,#00c6ff,#0072ff);color:#fff;border:none;font-weight:bold;">💬 发私信</button>
+      <h3>对 <span id="modalTargetName" style="color:#00c6ff;"></span> 操作</h3>
+      <button id="btnStartPM" style="background:linear-gradient(135deg,#00c6ff,#0072ff);color:#fff;border:none;font-weight:bold;display:none;">💬 发私信 / 加好友</button>
+      
+      <button id="btnSetAdmin" style="background:rgba(0,122,255,0.15);color:#0a84ff;border:1px solid rgba(0,122,255,0.3);display:none;"></button>
+      <button id="btnMute" style="background:rgba(255,149,0,0.15);color:#ff9500;border:1px solid rgba(255,149,0,0.3);display:none;"></button>
+      <button id="kickBtn" onclick="kickTarget()" style="background:rgba(255,59,48,0.15);color:#ff453a;border:1px solid rgba(255,59,48,0.3);display:none;">踢出群聊</button>
+      <button id="manualViolationBtn" onclick="manualViolation()" style="background:rgba(255,59,48,0.15);color:#ff453a;border:1px solid rgba(255,59,48,0.3);display:none;">⚠️ 举报该用户</button>
+
       <button class="btn-close" onclick="closeActionModal()">取消</button>
     </div>
   </div>
@@ -1463,7 +1643,6 @@
     </div>
   </div>
 
-  <!-- 悬浮球变为 Canvas 画布 -->
   <div class="music-fab" id="musicFab">
     <canvas id="audioVisualizer"></canvas>
   </div>
