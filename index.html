@@ -138,15 +138,11 @@
       return m + " 分钟";
     }
 
-    // 🌟 修复：兼容布尔值和对象，并醒目显示原因
     function showBanScreen(banData) {
       let reasonText = "该设备已被永久封禁";
-      
-      // 如果是对象且包含 reason，就显示 reason
       if (banData && typeof banData === 'object' && banData.reason) {
         reasonText = banData.reason;
       }
-
       document.body.innerHTML = `
         <div id="ban-screen" style="position:fixed;top:0;left:0;width:100%;height:100%;background:#000;display:flex;justify-content:center;align-items:center;z-index:99999;flex-direction:column;padding:20px;text-align:center;">
           <h1 style="color:#ff3b30;font-size:32px;font-weight:800;text-shadow:0 0 30px rgba(255,59,48,0.6);">🚫 数据异常，已强行下线</h1>
@@ -166,7 +162,7 @@
           const banData = snap.val();
           const currentName = localStorage.getItem('chat_username');
           if (currentName) sessionStorage.setItem('ghost_username', currentName);
-          showBanScreen(banData); // 把整个数据传进去
+          showBanScreen(banData);
         } else {
           if (document.getElementById('ban-screen')) {
             const ghostName = sessionStorage.getItem('ghost_username');
@@ -849,10 +845,167 @@
       navigator.clipboard.writeText(currentGroupId).then(() => alert("群号已复制！")).catch(() => {});
     };
 
+    // ==================== 🎵 音乐播放器（平均跳动频谱版） ====================
+    let audioContext = null;
+    let analyser = null;
+    let source = null;
+    let animationId = null;
+    let isPlaying = false;
+
     function initMusicPlayer() {
       const musicFab = document.getElementById('musicFab');
       const musicPlayer = document.getElementById('musicPlayer');
       const closeBtn = musicPlayer.querySelector('.music-close');
+      const audio = document.getElementById('audioPlayer');
+      const canvas = document.getElementById('audioVisualizer');
+      const ctx = canvas.getContext('2d');
+
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = 80 * dpr;
+      canvas.height = 80 * dpr;
+      ctx.scale(dpr, dpr);
+      const centerX = 40, centerY = 40, baseRadius = 18;
+      const bars = 45; // 保持45条线
+
+      function drawIdle() {
+        ctx.clearRect(0, 0, 80, 80);
+        const grad = ctx.createLinearGradient(0, 0, 80, 80);
+        grad.addColorStop(0, '#ff0080');
+        grad.addColorStop(1, '#7928ca');
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, baseRadius + 6, 0, Math.PI * 2);
+        ctx.fillStyle = grad;
+        ctx.shadowBlur = 15;
+        ctx.shadowColor = 'rgba(255,0,128,0.6)';
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        
+        ctx.font = '20px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('🎵', centerX, centerY + 1);
+      }
+
+      function drawVisualizer() {
+        if (!isPlaying) return;
+        animationId = requestAnimationFrame(drawVisualizer);
+
+        ctx.clearRect(0, 0, 80, 80);
+        
+        let dataArray = new Uint8Array(0);
+        let hasData = false;
+        if (analyser) {
+          dataArray = new Uint8Array(analyser.frequencyBinCount);
+          analyser.getByteFrequencyData(dataArray);
+          hasData = dataArray.some(v => v > 0);
+        }
+
+        const now = Date.now();
+        const fakeData = (Math.sin(now / 200) + 1) / 2; 
+
+        // 预计算所有高度，用来做平滑平均
+        let rawHeights = [];
+        for (let i = 0; i < bars; i++) {
+          let h = 0;
+          if (hasData) {
+            // 取一段中低频的数据，使其看起来像整体的“动次打次”而不是尖锐的刺
+            const dataIndex = Math.floor(10 + (i / bars) * 40); 
+            h = (dataArray[dataIndex] / 255) * 25;
+          } else {
+            h = fakeData * 15 + Math.random() * 5;
+          }
+          rawHeights.push(h);
+        }
+
+        // 关键修复：滑动平均，让线条平滑过渡，一起跳动
+        const smoothedHeights = [];
+        for (let i = 0; i < bars; i++) {
+          const prev = rawHeights[(i - 1 + bars) % bars];
+          const curr = rawHeights[i];
+          const next = rawHeights[(i + 1) % bars];
+          // 取自己与左右相邻的平均值
+          const avg = (prev + curr + next) / 3;
+          smoothedHeights.push(Math.max(3, avg)); 
+        }
+
+        for (let i = 0; i < bars; i++) {
+          const angle = (i / bars) * Math.PI * 2;
+          const height = smoothedHeights[i];
+
+          const startX = centerX + Math.cos(angle) * (baseRadius + 8);
+          const startY = centerY + Math.sin(angle) * (baseRadius + 8);
+          const endX = centerX + Math.cos(angle) * (baseRadius + 8 + height);
+          const endY = centerY + Math.sin(angle) * (baseRadius + 8 + height);
+
+          ctx.beginPath();
+          ctx.moveTo(startX, startY);
+          ctx.lineTo(endX, endY);
+          
+          // 高度越高，颜色越红
+          const colorRatio = height / 30;
+          if (colorRatio > 0.6) {
+            ctx.strokeStyle = `rgba(255, 59, 48, ${0.5 + colorRatio * 0.5})`;
+          } else {
+            ctx.strokeStyle = `rgba(255, 0, 128, ${0.3 + colorRatio * 0.7})`;
+          }
+          
+          ctx.lineWidth = 3;
+          ctx.lineCap = 'round';
+          ctx.stroke();
+        }
+
+        const grad = ctx.createLinearGradient(0, 0, 80, 80);
+        grad.addColorStop(0, '#ff0080');
+        grad.addColorStop(1, '#7928ca');
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, baseRadius + 6, 0, Math.PI * 2);
+        ctx.fillStyle = grad;
+        ctx.shadowBlur = 15;
+        ctx.shadowColor = 'rgba(255,0,128,0.6)';
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        
+        ctx.font = '20px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('⏸', centerX, centerY + 1);
+      }
+
+      function setupAudio() {
+        if (!audioContext) {
+          const AudioContext = window.AudioContext || window.webkitAudioContext;
+          audioContext = new AudioContext();
+          analyser = audioContext.createAnalyser();
+          analyser.fftSize = 256;
+          source = audioContext.createMediaElementSource(audio);
+          source.connect(analyser);
+          analyser.connect(audioContext.destination);
+        }
+        if (audioContext.state === 'suspended') {
+          audioContext.resume();
+        }
+      }
+
+      audio.addEventListener('play', () => {
+        setupAudio();
+        isPlaying = true;
+        cancelAnimationFrame(animationId);
+        drawVisualizer();
+      });
+
+      audio.addEventListener('pause', () => {
+        isPlaying = false;
+        cancelAnimationFrame(animationId);
+        setTimeout(() => { if(!isPlaying) drawIdle(); }, 200);
+      });
+
+      audio.addEventListener('ended', () => {
+        isPlaying = false;
+        cancelAnimationFrame(animationId);
+        drawIdle();
+      });
+
+      drawIdle();
 
       musicFab.addEventListener('click', function (e) {
         e.stopPropagation();
@@ -924,6 +1077,7 @@
         );
         const data = await res.json();
         if (data && data.url) {
+          audio.crossOrigin = "anonymous"; 
           audio.src = data.url;
           audio.play().catch(err => {
             console.warn('播放被阻止', err);
@@ -995,8 +1149,16 @@
     .member-list { margin-top: 10px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 10px; }
     .btn-login { background: linear-gradient(135deg, #0072ff, #00c6ff); box-shadow: 0 8px 25px rgba(0,122,255,0.4); color: white; }
     .btn-one-click { background: rgba(0,122,255,0.15); color: #0a84ff; border: 1px solid rgba(0,122,255,0.3); }
-    .music-fab { position: fixed; bottom: 90px; right: 20px; width: 50px; height: 50px; background: linear-gradient(135deg, #ff0080, #7928ca); border-radius: 50%; display: flex; justify-content: center; align-items: center; font-size: 24px; cursor: pointer; z-index: 2147483647; box-shadow: 0 10px 25px rgba(255,0,128,0.4); transition: transform 0.3s; user-select: none; }
+    
+    /* 音乐悬浮球：升级为 Canvas 频谱 */
+    .music-fab { 
+      position: fixed; bottom: 70px; right: 10px; width: 80px; height: 80px; 
+      cursor: pointer; z-index: 2147483647; transition: transform 0.3s; user-select: none;
+      display: flex; justify-content: center; align-items: center;
+    }
+    .music-fab canvas { width: 80px; height: 80px; }
     .music-fab:active { transform: scale(0.9); }
+    
     #musicPlayer { position: fixed; bottom: -100%; left: 5%; width: 90%; max-width: 400px; background: rgba(30,30,30,0.95); backdrop-filter: blur(30px); border: 1px solid rgba(255,255,255,0.2); border-radius: 24px; padding: 20px; z-index: 2147483647; transition: bottom 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); box-shadow: 0 30px 60px rgba(0,0,0,0.8); display: flex; flex-direction: column; gap: 15px; }
     #musicPlayer.show { bottom: 20px; }
     .music-header { display: flex; justify-content: space-between; align-items: center; color: #fff; font-weight: bold; }
@@ -1094,7 +1256,11 @@
     </div>
   </div>
 
-  <div class="music-fab" id="musicFab">🎵</div>
+  <!-- 悬浮球变为 Canvas 画布 -->
+  <div class="music-fab" id="musicFab">
+    <canvas id="audioVisualizer"></canvas>
+  </div>
+
   <div id="musicPlayer">
     <div class="music-header">
       <span>🎵 全网音乐搜索</span>
@@ -1108,7 +1274,7 @@
       <div style="text-align:center;color:rgba(255,255,255,0.4);font-size:12px;padding:20px;">输入歌名，回车搜索全网音乐</div>
     </div>
     <div class="audio-controls">
-      <audio id="audioPlayer" controls></audio>
+      <audio id="audioPlayer" crossorigin="anonymous" controls></audio>
     </div>
   </div>
 </body>
