@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <title>极光聊天 · 玩家端</title>
+  <title>极光聊天</title>
   <script>
     if (localStorage.getItem('chat_username')) {
       document.documentElement.style.visibility = 'hidden';
@@ -25,7 +25,7 @@
     let myName = "";
     let myDeviceId = "";
     let currentGroupId = "";
-    let currentPrivateChatUser = ""; // 当前正在私聊谁
+    let currentPrivateChatUser = ""; 
     let myGroups = JSON.parse(localStorage.getItem('chat_mygroups') || "[]");
     let currentGroupInfo = {};
     let actionTargetName = "";
@@ -360,7 +360,7 @@
       });
     };
 
-    // ==================== 大厅（群聊与私聊列表） ====================
+    // ==================== 大厅 ====================
     let lobbyListenerBound = false;
     function renderLobby() {
       document.getElementById('myNameDisplay').innerText = myName + (isAuthor ? ' 👑' : '');
@@ -444,13 +444,19 @@
       const input = document.getElementById('privateMsgInput');
       const text = input.value.trim();
       if (!text) return;
-      const roomId = [myName, currentPrivateChatUser].sort().join('_');
-      push(ref(db, `private_msgs/${roomId}`), {
-        sender: myName,
-        text: text,
-        time: Date.now()
+      
+      get(ref(db, 'global_muted/' + myName)).then(snap => {
+        if (snap.exists() && snap.val() > Date.now()) {
+          return alert(`🚫 你已被作者全网禁言，无法发送私信！`);
+        }
+        const roomId = [myName, currentPrivateChatUser].sort().join('_');
+        push(ref(db, `private_msgs/${roomId}`), {
+          sender: myName,
+          text: text,
+          time: Date.now()
+        });
+        input.value = '';
       });
-      input.value = '';
     };
 
     window.handlePrivateEnter = function(e) {
@@ -485,15 +491,21 @@
       const input = document.getElementById('plazaInput');
       const text = input.value.trim();
       if (!text) return;
-      push(ref(db, 'plaza'), {
-        sender: myName,
-        text: text,
-        time: Date.now(),
-        level: myLevel,
-        title: myTitle,
-        isAuthor: isAuthor
+
+      get(ref(db, 'global_muted/' + myName)).then(snap => {
+        if (snap.exists() && snap.val() > Date.now()) {
+          return alert(`🚫 你已被作者全网禁言，无法在广场发言！`);
+        }
+        push(ref(db, 'plaza'), {
+          sender: myName,
+          text: text,
+          time: Date.now(),
+          level: myLevel,
+          title: myTitle,
+          isAuthor: isAuthor
+        });
+        input.value = '';
       });
-      input.value = '';
     };
 
     window.handlePlazaEnter = function (e) {
@@ -691,44 +703,50 @@
         return alert("🚫 群主开启了全员禁言，你无法发言！");
       }
 
-      let hasBadWord = false;
-      for (let w of BAD_WORDS) {
-        if (text.toLowerCase().includes(w.toLowerCase())) {
-          hasBadWord = true;
-          break;
+      get(ref(db, 'global_muted/' + myName)).then(snap => {
+        if (snap.exists() && snap.val() > Date.now()) {
+          return alert(`🚫 你已被作者全网禁言！`);
         }
-      }
-      if (hasBadWord) {
-        const violationRef = ref(db, 'violations/' + myName);
-        get(violationRef).then(snap => {
-          const currentCount = snap.exists() ? snap.val().count : 0;
-          set(violationRef, { count: currentCount + 1, lastTime: Date.now(), lastWord: text });
-        });
-      }
 
-      get(ref(db, 'banned/' + myName)).then((snap) => {
-        if (snap.exists()) return alert("🚫 你已被全网封杀，无法发言！");
-
-        get(ref(db, `groups/${currentGroupId}/muted/${myName}`)).then((muteSnap) => {
-          if (muteSnap.exists()) {
-            const until = muteSnap.val();
-            if (until > Date.now()) {
-              const remain = until - Date.now();
-              return alert(`🚫 你已被禁言，剩余 ${formatRemain(remain)}！`);
-            } else {
-              remove(ref(db, `groups/${currentGroupId}/muted/${myName}`)).catch(() => {});
-            }
+        let hasBadWord = false;
+        for (let w of BAD_WORDS) {
+          if (text.toLowerCase().includes(w.toLowerCase())) {
+            hasBadWord = true;
+            break;
           }
-
-          push(ref(db, `groups/${currentGroupId}/messages`), {
-            sender: myName,
-            text: text,
-            time: Date.now(),
-            isAuthorMsg: isAuthor,
-            level: myLevel,
-            title: myTitle
+        }
+        if (hasBadWord) {
+          const violationRef = ref(db, 'violations/' + myName);
+          get(violationRef).then(snap => {
+            const currentCount = snap.exists() ? snap.val().count : 0;
+            set(violationRef, { count: currentCount + 1, lastTime: Date.now(), lastWord: text });
           });
-          input.value = '';
+        }
+
+        get(ref(db, 'banned/' + myName)).then((snap) => {
+          if (snap.exists()) return alert("🚫 你已被全网封杀，无法发言！");
+
+          get(ref(db, `groups/${currentGroupId}/muted/${myName}`)).then((muteSnap) => {
+            if (muteSnap.exists()) {
+              const until = muteSnap.val();
+              if (until > Date.now()) {
+                const remain = until - Date.now();
+                return alert(`🚫 你已被群主禁言，剩余 ${formatRemain(remain)}！`);
+              } else {
+                remove(ref(db, `groups/${currentGroupId}/muted/${myName}`)).catch(() => {});
+              }
+            }
+
+            push(ref(db, `groups/${currentGroupId}/messages`), {
+              sender: myName,
+              text: text,
+              time: Date.now(),
+              isAuthorMsg: isAuthor,
+              level: myLevel,
+              title: myTitle
+            });
+            input.value = '';
+          });
         });
       });
     };
@@ -1241,7 +1259,7 @@
     document.addEventListener('DOMContentLoaded', initMusicPlayer);
   </script>
   <style>
-    /* 基础样式 */
+    /* 客户端样式 */
     * { margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; -webkit-tap-highlight-color: transparent; }
     body { background: #000; color: #fff; height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; position: relative; }
     body::before { content: ''; position: fixed; top: -50vh; left: -50vw; width: 200vw; height: 200vh; background: radial-gradient(circle at 20% 30%, rgba(100,200,255,0.4) 0%, transparent 40%), radial-gradient(circle at 80% 70%, rgba(255,100,200,0.4) 0%, transparent 40%); animation: spin 20s linear infinite; filter: blur(40px); z-index: -1; }
