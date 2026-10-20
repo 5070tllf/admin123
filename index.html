@@ -222,6 +222,7 @@
             listenWarnings();
             listenGlobalMute();
             listenAllUsersData();
+            listenPrivateUnreadBadge();
             showScreen('lobbyScreen');
             renderLobby();
             return;
@@ -288,6 +289,7 @@
           listenWarnings();
           listenGlobalMute();
           listenAllUsersData();
+          listenPrivateUnreadBadge();
           showScreen('lobbyScreen');
           renderLobby();
         } else {
@@ -335,6 +337,7 @@
               listenWarnings();
               listenGlobalMute();
               listenAllUsersData();
+              listenPrivateUnreadBadge();
               showScreen('lobbyScreen');
               renderLobby();
             } else {
@@ -360,6 +363,7 @@
                     listenWarnings();
                     listenGlobalMute();
                     listenAllUsersData();
+                    listenPrivateUnreadBadge();
                     showScreen('lobbyScreen');
                     renderLobby();
                   });
@@ -382,6 +386,39 @@
       });
     };
 
+    // ==================== 未读私信红点 ====================
+    let globalPmListener = null;
+    function listenPrivateUnreadBadge() {
+      if (globalPmListener) return;
+      globalPmListener = onValue(ref(db, 'private_msgs'), (snap) => {
+        let unreadCount = 0;
+        if (snap.exists()) {
+          snap.forEach(roomSnap => {
+            const roomId = roomSnap.key;
+            const users = roomId.split('_');
+            if (users.includes(myName)) {
+              const lastRead = parseInt(localStorage.getItem('read_pm_' + roomId) || '0');
+              let lastMsgTime = 0;
+              roomSnap.forEach(msgSnap => {
+                if (msgSnap.val().time > lastMsgTime) lastMsgTime = msgSnap.val().time;
+              });
+              if (lastMsgTime > lastRead) unreadCount++;
+            }
+          });
+        }
+        const badge = document.getElementById('pmBadge');
+        if (badge) {
+          if (unreadCount > 0) {
+            badge.innerText = unreadCount > 99 ? '99+' : unreadCount;
+            badge.style.display = 'block';
+          } else {
+            badge.style.display = 'none';
+          }
+        }
+      });
+    }
+
+    // ==================== 大厅 ====================
     let lobbyListenerBound = false;
     function renderLobby() {
       document.getElementById('myNameDisplay').innerText = myName + (isAuthor ? ' 👑' : '');
@@ -417,18 +454,30 @@
               const gName = snap.val().name || ("群聊 " + gid);
               const div = document.createElement('div');
               div.className = 'chat-item';
-              div.innerHTML = `<div class="avatar">👥</div><div class="info"><div class="name">${gName}</div></div>`;
+              div.innerHTML = `<div class="avatar">👥</div><div class="info"><div class="name">${gName}</div></div>
+                               <span class="badge" id="groupBadge_${gid}" style="display:none;">群消息</span>`;
               div.onclick = () => enterChat(gid);
               listEl.appendChild(div);
+              
+              onValue(ref(db, `groups/${gid}/messages`), (msgSnap) => {
+                let lastMsgTime = 0;
+                msgSnap.forEach(c => { if(c.val().time > lastMsgTime) lastMsgTime = c.val().time; });
+                const lastRead = parseInt(localStorage.getItem('read_group_' + gid) || '0');
+                const badge = document.getElementById(`groupBadge_${gid}`);
+                if (badge) {
+                  if (lastMsgTime > lastRead) badge.style.display = 'block';
+                  else badge.style.display = 'none';
+                }
+              });
             }
           });
         });
       });
     }
 
-    // ==================== 私信列表功能 ====================
+    // ==================== 私信列表 ====================
     let privateListListener = null;
-    let myPrivateRooms = {}; // 存储当前用户的私信房间
+    let myPrivateRooms = {}; 
 
     window.goPrivateList = function() {
       showScreen('privateListScreen');
@@ -440,12 +489,10 @@
           snapshot.forEach(roomSnap => {
             const roomId = roomSnap.key;
             const users = roomId.split('_');
-            // 如果房间包含当前玩家
             if (users.includes(myName)) {
               const msgs = roomSnap.val();
               let lastMsg = null;
               let lastTime = 0;
-              // 找到最后一条消息
               for (let key in msgs) {
                 if (msgs[key].time > lastTime) {
                   lastTime = msgs[key].time;
@@ -479,8 +526,10 @@
       roomsArray.forEach(room => {
         const div = document.createElement('div');
         div.className = 'chat-item';
-        // 截断长消息
         let preview = room.lastText.length > 15 ? room.lastText.substring(0, 15) + '...' : room.lastText;
+        
+        const lastRead = parseInt(localStorage.getItem('read_pm_' + room.roomId) || '0');
+        const hasUnread = room.lastTime > lastRead ? 'block' : 'none';
         
         div.innerHTML = `
           <div class="avatar" style="background:linear-gradient(135deg,#00c6ff,#0072ff);">💬</div>
@@ -493,6 +542,7 @@
               ${preview}
             </div>
           </div>
+          <span class="badge" style="display:${hasUnread}; right: 15px;">未读</span>
         `;
         div.onclick = () => startPrivateChat(room.otherUser);
         listEl.appendChild(div);
@@ -504,20 +554,25 @@
       showScreen('lobbyScreen');
     };
 
-    // ==================== 单人私聊功能 ====================
+    // ==================== 单人私聊 ====================
     let privateMsgListener = null;
     window.startPrivateChat = function(targetName) {
       if (targetName === myName) return alert("不能和自己私聊哦！");
       currentPrivateChatUser = targetName;
+      
+      const roomIdStr = [myName, targetName].sort().join('_');
+      localStorage.setItem('read_pm_' + roomIdStr, Date.now().toString());
+      const badge = document.getElementById('pmBadge');
+      if (badge) badge.style.display = 'none'; // 隐藏顶部红点
+
       document.getElementById('privateChatName').innerText = "与 " + targetName + " 私聊中";
       showScreen('privateChatScreen');
 
       if (privateMsgListener) { privateMsgListener(); privateMsgListener = null; }
-      const roomId = [myName, targetName].sort().join('_');
       const box = document.getElementById('privateChatContent');
       box.innerHTML = '';
 
-      privateMsgListener = onValue(query(ref(db, `private_msgs/${roomId}`), limitToLast(50)), (snapshot) => {
+      privateMsgListener = onValue(query(ref(db, `private_msgs/${roomIdStr}`), limitToLast(50)), (snapshot) => {
         box.innerHTML = '';
         if (snapshot.exists()) {
           snapshot.forEach(child => {
@@ -536,12 +591,7 @@
     window.closePrivateChat = function() {
       if (privateMsgListener) { privateMsgListener(); privateMsgListener = null; }
       currentPrivateChatUser = "";
-      // 如果是从私信列表点进来的，返回列表；否则返回大厅
-      if (document.getElementById('privateListScreen').style.display === 'flex') {
-        showScreen('privateListScreen');
-      } else {
-        showScreen('lobbyScreen');
-      }
+      showScreen('lobbyScreen');
     };
 
     window.sendPrivateMsg = function() {
@@ -650,7 +700,7 @@
       setTimeout(() => { box.scrollTop = box.scrollHeight; }, 50);
     }
 
-    // ==================== 群聊相关 ====================
+    // ==================== 群聊 ====================
     window.createGroup = function () {
       const gName = prompt("请给新群聊起个名字：");
       if (!gName || gName.trim() === "") return alert("取消创建：群名不能为空！");
@@ -733,6 +783,10 @@
 
     function enterChat(gid) {
       currentGroupId = gid;
+      localStorage.setItem('read_group_' + gid, Date.now().toString());
+      const badge = document.getElementById(`groupBadge_${gid}`);
+      if (badge) badge.style.display = 'none';
+
       update(ref(db, 'status/' + myName), { currentGroup: gid });
       
       showScreen('chatScreen');
@@ -784,6 +838,9 @@
 
       const messagesRef = query(ref(db, `groups/${gid}/messages`), limitToLast(50));
       const unsubMsg = onValue(messagesRef, (snapshot) => {
+        // 更新已读时间
+        localStorage.setItem('read_group_' + gid, Date.now().toString());
+        
         const box = document.getElementById('chatContent');
         box.innerHTML = '';
         if (snapshot.exists()) {
@@ -1439,15 +1496,13 @@
     .lobby-header > div { display: flex; align-items: center; gap: 15px; }
     .logout-btn { background: rgba(255,59,48,0.15); border: 1px solid rgba(255,59,48,0.3); color: #ff453a; font-size: 13px; font-weight: 600; cursor: pointer; padding: 6px 12px; border-radius: 10px; transition: 0.2s; }
     
-    .lobby-btns { padding: 20px; display: flex; gap: 10px; flex-shrink: 0; }
-    .lobby-btns button { flex: 1; padding: 14px; border: 1px solid rgba(0,122,255,0.5); border-radius: 14px; font-weight: bold; font-size: 15px; cursor: pointer; background: rgba(0,122,255,0.2); color: #0a84ff; box-shadow: 0 8px 20px rgba(0,122,255,0.15); backdrop-filter: blur(10px); transition: 0.2s; }
-    .lobby-btns button.btn-plaza { border-color: rgba(255,0,255,0.5); color: #ff00ff; background: rgba(255,0,255,0.2); }
+    .lobby-btns button { padding: 14px; border: 1px solid transparent; border-radius: 14px; font-weight: bold; font-size: 15px; cursor: pointer; transition: 0.2s; }
     
     .btn-join-box { display: flex; gap: 10px; padding: 0 20px 20px 20px; flex-shrink: 0; }
     .btn-join-box input { flex: 1; padding: 14px; border: 1px solid rgba(255,255,255,0.1); border-radius: 14px; outline: none; font-size: 15px; background: rgba(0,0,0,0.3); color: #fff; }
     .btn-join-box button { padding: 0 20px; background: rgba(52,199,89,0.2); border: 1px solid rgba(52,199,89,0.5); color: #30d158; border-radius: 14px; font-weight: bold; box-shadow: 0 8px 20px rgba(52,199,89,0.15); backdrop-filter: blur(10px); transition: 0.2s; }
     .group-list { flex: 1; overflow-y: auto; padding: 10px 20px; -webkit-overflow-scrolling: touch; }
-    .chat-item { display: flex; align-items: center; padding: 16px; margin-bottom: 12px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 18px; box-shadow: 0 10px 20px rgba(0,0,0,0.2); cursor: pointer; transition: 0.2s; backdrop-filter: blur(10px); }
+    .chat-item { display: flex; align-items: center; padding: 16px; margin-bottom: 12px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 18px; box-shadow: 0 10px 20px rgba(0,0,0,0.2); cursor: pointer; transition: 0.2s; backdrop-filter: blur(10px); position: relative; }
     .chat-item:active { transform: scale(0.97); background: rgba(255,255,255,0.1); }
     .avatar { width: 48px; height: 48px; border-radius: 14px; background: linear-gradient(135deg, #00c6ff, #0072ff); display: flex; justify-content: center; align-items: center; font-size: 22px; margin-right: 15px; color: white; box-shadow: 0 4px 10px rgba(0,122,255,0.3); flex-shrink: 0; }
     .info .name { font-size: 17px; font-weight: 600; color: #fff; }
@@ -1506,6 +1561,23 @@
     .plaza-header { background: rgba(0,0,0,0.5); border-bottom: 1px solid rgba(255,0,255,0.3); padding: 20px; display: flex; justify-content: space-between; align-items: center; }
     .plaza-msg { background: rgba(255,255,255,0.05); border-radius: 12px; padding: 15px; border-left: 3px solid #ff00ff; margin-bottom: 10px;}
     .plaza-text { font-size: 15px; color: #ddd; line-height: 1.5; word-break: break-all; }
+
+    /* 未读消息红点样式 */
+    .badge {
+      position: absolute;
+      top: -5px;
+      right: -5px;
+      background: #ff3b30;
+      color: #fff;
+      font-size: 10px;
+      font-weight: bold;
+      padding: 2px 6px;
+      border-radius: 10px;
+      box-shadow: 0 2px 5px rgba(255,59,48,0.5);
+      display: none;
+      z-index: 10;
+    }
+    .tab-btn { position: relative; }
   </style>
 </head>
 <body>
@@ -1528,10 +1600,12 @@
       </div>
     </div>
     
-    <div class="lobby-btns">
-      <button class="btn-create" onclick="createGroup()">➕ 创建群聊</button>
-      <button class="btn-plaza" onclick="goPlaza()">📢 全球广场</button>
-      <button onclick="goPrivateList()" style="border-color:rgba(0,198,255,0.5);color:#00c6ff;background:rgba(0,198,255,0.2);">💬 我的私信</button>
+    <div class="lobby-btns" style="display:flex; gap:10px; padding:20px;">
+      <button class="btn-create tab-btn" onclick="switchLobbyTab('groups')" id="tabGroups" style="flex:1; border-color:rgba(0,122,255,0.5); color:#0a84ff; background:rgba(0,122,255,0.2);">群聊</button>
+      <button class="btn-plaza tab-btn" onclick="goPlaza()" id="tabPlaza" style="flex:1; border-color:rgba(255,0,255,0.5); color:#ff00ff; background:rgba(255,0,255,0.2);">广场</button>
+      <button class="btn-private tab-btn" onclick="goPrivateList()" id="tabPrivate" style="flex:1; border-color:rgba(0,198,255,0.5); color:#00c6ff; background:rgba(0,198,255,0.2);">私信
+        <span class="badge" id="pmBadge">0</span>
+      </button>
     </div>
     
     <div class="btn-join-box">
@@ -1541,7 +1615,6 @@
     <div class="group-list" id="myGroupList"></div>
   </div>
 
-  <!-- 私信列表页 -->
   <div id="privateListScreen">
     <div class="header">
       <div class="header-left">
@@ -1550,7 +1623,6 @@
       </div>
     </div>
     <div class="chat-content" id="privateListContent" style="padding:15px; gap:10px;">
-      <!-- 私信列表 -->
     </div>
   </div>
 
@@ -1603,7 +1675,6 @@
     </div>
   </div>
 
-  <!-- 聊天消息点击弹窗（包含私信、管理、撤回提示等） -->
   <div id="actionModal">
     <div class="action-box">
       <h3>对 <span id="modalTargetName" style="color:#00c6ff;"></span> 操作</h3>
