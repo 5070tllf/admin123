@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+　<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
@@ -24,6 +24,7 @@
 
     let myName = "";
     let myDeviceId = "";
+    let myFingerprint = "";
     let currentGroupId = "";
     let currentPrivateChatUser = ""; 
     let myGroups = JSON.parse(localStorage.getItem('chat_mygroups') || "[]");
@@ -38,6 +39,33 @@
     let allUsersData = {};
 
     let BAD_WORDS = ["傻逼", "操你妈", "妈的", "去死", "煞笔", "脑残", "婊子", "杂种", "龟儿子", "狗日", "贱人", "王八蛋", "滚蛋", "尼玛", "草泥马", "沙比", "玛德", "卧槽", "我擦", "特么", "特么的", "法克", "fuck", "shit", "bitch", "asshole", "bastard", "dick", "pussy", "cunt", "motherfucker"];
+
+    // ==================== 浏览器指纹（新增） ====================
+    async function getBrowserFingerprint() {
+      try {
+        const FingerprintJS = await import('https://openfpcdn.io/fingerprintjs/v4');
+        const fp = await FingerprintJS.load();
+        const result = await fp.get();
+        return result.visitorId;
+      } catch (e) {
+        console.warn("指纹生成失败，使用降级方案", e);
+        // 降级：用简单特征拼接 hash
+        const raw = [
+          navigator.userAgent,
+          screen.width + 'x' + screen.height,
+          navigator.language,
+          Intl.DateTimeFormat().resolvedOptions().timeZone,
+          navigator.hardwareConcurrency || 0
+        ].join('|');
+        let hash = 0;
+        for (let i = 0; i < raw.length; i++) {
+          const chr = raw.charCodeAt(i);
+          hash = ((hash << 5) - hash) + chr;
+          hash |= 0;
+        }
+        return 'FB-' + Math.abs(hash).toString(36).toUpperCase();
+      }
+    }
 
     function getDeviceId() {
       let dId = localStorage.getItem('chat_device_id');
@@ -310,12 +338,25 @@
       document.getElementById(id).style.display = 'flex';
     }
 
-    window.loginOrRegister = function () {
+    // ==================== 登录/注册（修改：加入指纹自动封禁） ====================
+    window.loginOrRegister = async function () {
       const user = document.getElementById('username').value.trim();
       const pass = document.getElementById('password').value.trim();
       if (!user || !pass) return alert('账号和密码不能为空！');
       if (user.length < 2) return alert('账号至少2个字符');
       if (pass.length < 4) return alert('密码至少4位');
+
+      // 获取浏览器指纹
+      myFingerprint = await getBrowserFingerprint();
+
+      // 检查指纹是否已被封禁
+      const fpBanSnap = await get(ref(db, 'banned_fingerprints/' + myFingerprint));
+      if (fpBanSnap.exists()) {
+        const banData = fpBanSnap.val();
+        let reasonText = "该设备指纹已被系统限制";
+        if (typeof banData === 'object' && banData.reason) reasonText = banData.reason;
+        return alert(`🚫 ${reasonText}\n\n如需申诉，请联系作者。`);
+      }
 
       get(ref(db, 'banned_devices/' + myDeviceId)).then(devSnap => {
         if (devSnap.exists()) {
@@ -326,13 +367,15 @@
         }
 
         const encryptedPass = btoa(pass);
-        get(ref(db, 'users/' + user)).then((snapshot) => {
+        get(ref(db, 'users/' + user)).then(async (snapshot) => {
           if (snapshot.exists()) {
             if (snapshot.val().password === encryptedPass) {
               myName = user;
               isAuthor = !!snapshot.val().isAuthor;
               localStorage.setItem('chat_username', myName);
-              update(ref(db, 'users/' + user), { deviceId: myDeviceId });
+              update(ref(db, 'users/' + user), { deviceId: myDeviceId, fingerprint: myFingerprint });
+              // 登录时也把指纹绑定到 fingerprint_map
+              update(ref(db, 'fingerprint_map/' + myFingerprint + '/' + user), true).catch(() => {});
               initOnlineStatus();
               listenWarnings();
               listenGlobalMute();
@@ -345,6 +388,24 @@
             }
           } else {
             if (confirm(`账号 "${user}" 不存在，是否注册新账号？`)) {
+              // ========== 新增：注册前检查指纹已绑定账号数 ==========
+              const fpMapSnap = await get(ref(db, 'fingerprint_map/' + myFingerprint));
+              let boundAccounts = [];
+              if (fpMapSnap.exists()) {
+                boundAccounts = Object.keys(fpMapSnap.val());
+              }
+
+              // 如果这个指纹已经绑定了 2 个或以上账号，自动封禁
+              if (boundAccounts.length >= 2) {
+                await set(ref(db, 'banned_fingerprints/' + myFingerprint), {
+                  reason: '系统检测：同一设备注册过多账号，已自动限制',
+                  time: Date.now(),
+                  accounts: boundAccounts
+                });
+                return alert('🚫 该设备已被系统自动限制注册（同设备多账号检测）。\n如需申诉，请联系作者。');
+              }
+
+              // 正常注册流程
               get(ref(db, 'users/' + user)).then((checkSnap) => {
                 if (checkSnap.exists()) {
                   alert("❌ 该用户名已被抢注，请换一个！");
@@ -352,10 +413,13 @@
                   set(ref(db, 'users/' + user), {
                     password: encryptedPass,
                     deviceId: myDeviceId,
+                    fingerprint: myFingerprint,
                     isAuthor: false,
                     level: 1,
                     title: ""
                   }).then(() => {
+                    // 写入 fingerprint_map
+                    update(ref(db, 'fingerprint_map/' + myFingerprint + '/' + user), true).catch(() => {});
                     myName = user;
                     isAuthor = false;
                     localStorage.setItem('chat_username', myName);
@@ -563,7 +627,7 @@
       const roomIdStr = [myName, targetName].sort().join('_');
       localStorage.setItem('read_pm_' + roomIdStr, Date.now().toString());
       const badge = document.getElementById('pmBadge');
-      if (badge) badge.style.display = 'none'; // 隐藏顶部红点
+      if (badge) badge.style.display = 'none';
 
       document.getElementById('privateChatName').innerText = "与 " + targetName + " 私聊中";
       showScreen('privateChatScreen');
@@ -838,7 +902,6 @@
 
       const messagesRef = query(ref(db, `groups/${gid}/messages`), limitToLast(50));
       const unsubMsg = onValue(messagesRef, (snapshot) => {
-        // 更新已读时间
         localStorage.setItem('read_group_' + gid, Date.now().toString());
         
         const box = document.getElementById('chatContent');
