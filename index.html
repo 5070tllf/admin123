@@ -1,4 +1,4 @@
-　<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
@@ -24,7 +24,6 @@
 
     let myName = "";
     let myDeviceId = "";
-    let myFingerprint = "";
     let currentGroupId = "";
     let currentPrivateChatUser = ""; 
     let myGroups = JSON.parse(localStorage.getItem('chat_mygroups') || "[]");
@@ -39,33 +38,6 @@
     let allUsersData = {};
 
     let BAD_WORDS = ["傻逼", "操你妈", "妈的", "去死", "煞笔", "脑残", "婊子", "杂种", "龟儿子", "狗日", "贱人", "王八蛋", "滚蛋", "尼玛", "草泥马", "沙比", "玛德", "卧槽", "我擦", "特么", "特么的", "法克", "fuck", "shit", "bitch", "asshole", "bastard", "dick", "pussy", "cunt", "motherfucker"];
-
-    // ==================== 浏览器指纹（新增） ====================
-    async function getBrowserFingerprint() {
-      try {
-        const FingerprintJS = await import('https://openfpcdn.io/fingerprintjs/v4');
-        const fp = await FingerprintJS.load();
-        const result = await fp.get();
-        return result.visitorId;
-      } catch (e) {
-        console.warn("指纹生成失败，使用降级方案", e);
-        // 降级：用简单特征拼接 hash
-        const raw = [
-          navigator.userAgent,
-          screen.width + 'x' + screen.height,
-          navigator.language,
-          Intl.DateTimeFormat().resolvedOptions().timeZone,
-          navigator.hardwareConcurrency || 0
-        ].join('|');
-        let hash = 0;
-        for (let i = 0; i < raw.length; i++) {
-          const chr = raw.charCodeAt(i);
-          hash = ((hash << 5) - hash) + chr;
-          hash |= 0;
-        }
-        return 'FB-' + Math.abs(hash).toString(36).toUpperCase();
-      }
-    }
 
     function getDeviceId() {
       let dId = localStorage.getItem('chat_device_id');
@@ -242,8 +214,25 @@
         try {
           const snapshot = await get(ref(db, 'users/' + savedUser));
           if (snapshot.exists()) {
+            const uData = snapshot.val();
+            if (uData.status === 'pending') {
+              document.documentElement.style.visibility = 'visible';
+              showScreen('loginScreen');
+              setupOneClickLogin();
+              alert('⏳ 你的账号正在等待作者审核，通过后即可登录。');
+              return;
+            }
+            if (uData.status === 'rejected') {
+              localStorage.removeItem('chat_username');
+              localStorage.removeItem('chat_mygroups');
+              document.documentElement.style.visibility = 'visible';
+              showScreen('loginScreen');
+              setupOneClickLogin();
+              alert('❌ 你的注册申请已被作者拒绝。');
+              return;
+            }
             myName = savedUser;
-            isAuthor = !!snapshot.val().isAuthor;
+            isAuthor = !!uData.isAuthor;
             update(ref(db, 'users/' + savedUser), { deviceId: myDeviceId }).catch(() => {});
             document.documentElement.style.visibility = 'visible';
             initOnlineStatus(); 
@@ -311,8 +300,16 @@
       if (!savedUser) return;
       get(ref(db, 'users/' + savedUser)).then((snapshot) => {
         if (snapshot.exists()) {
+          const uData = snapshot.val();
+          if (uData.status === 'pending') {
+            return alert('⏳ 你的账号正在等待作者审核，通过后即可登录。');
+          }
+          if (uData.status === 'rejected') {
+            localStorage.removeItem('chat_username');
+            return alert('❌ 你的注册申请已被作者拒绝。');
+          }
           myName = savedUser;
-          isAuthor = !!snapshot.val().isAuthor;
+          isAuthor = !!uData.isAuthor;
           initOnlineStatus();
           listenWarnings();
           listenGlobalMute();
@@ -338,25 +335,13 @@
       document.getElementById(id).style.display = 'flex';
     }
 
-    // ==================== 登录/注册（修改：加入指纹自动封禁） ====================
-    window.loginOrRegister = async function () {
+    // ==================== 登录/注册（纯同步 .then 结构，无 await 卡顿） ====================
+    window.loginOrRegister = function () {
       const user = document.getElementById('username').value.trim();
       const pass = document.getElementById('password').value.trim();
       if (!user || !pass) return alert('账号和密码不能为空！');
       if (user.length < 2) return alert('账号至少2个字符');
       if (pass.length < 4) return alert('密码至少4位');
-
-      // 获取浏览器指纹
-      myFingerprint = await getBrowserFingerprint();
-
-      // 检查指纹是否已被封禁
-      const fpBanSnap = await get(ref(db, 'banned_fingerprints/' + myFingerprint));
-      if (fpBanSnap.exists()) {
-        const banData = fpBanSnap.val();
-        let reasonText = "该设备指纹已被系统限制";
-        if (typeof banData === 'object' && banData.reason) reasonText = banData.reason;
-        return alert(`🚫 ${reasonText}\n\n如需申诉，请联系作者。`);
-      }
 
       get(ref(db, 'banned_devices/' + myDeviceId)).then(devSnap => {
         if (devSnap.exists()) {
@@ -367,15 +352,20 @@
         }
 
         const encryptedPass = btoa(pass);
-        get(ref(db, 'users/' + user)).then(async (snapshot) => {
+        get(ref(db, 'users/' + user)).then((snapshot) => {
           if (snapshot.exists()) {
-            if (snapshot.val().password === encryptedPass) {
+            const uData = snapshot.val();
+            if (uData.password === encryptedPass) {
+              if (uData.status === 'pending') {
+                return alert('⏳ 你的账号正在等待作者审核，通过后即可登录。');
+              }
+              if (uData.status === 'rejected') {
+                return alert('❌ 你的注册申请已被作者拒绝。');
+              }
               myName = user;
-              isAuthor = !!snapshot.val().isAuthor;
+              isAuthor = !!uData.isAuthor;
               localStorage.setItem('chat_username', myName);
-              update(ref(db, 'users/' + user), { deviceId: myDeviceId, fingerprint: myFingerprint });
-              // 登录时也把指纹绑定到 fingerprint_map
-              update(ref(db, 'fingerprint_map/' + myFingerprint + '/' + user), true).catch(() => {});
+              update(ref(db, 'users/' + user), { deviceId: myDeviceId });
               initOnlineStatus();
               listenWarnings();
               listenGlobalMute();
@@ -387,25 +377,7 @@
               alert('密码错误！');
             }
           } else {
-            if (confirm(`账号 "${user}" 不存在，是否注册新账号？`)) {
-              // ========== 新增：注册前检查指纹已绑定账号数 ==========
-              const fpMapSnap = await get(ref(db, 'fingerprint_map/' + myFingerprint));
-              let boundAccounts = [];
-              if (fpMapSnap.exists()) {
-                boundAccounts = Object.keys(fpMapSnap.val());
-              }
-
-              // 如果这个指纹已经绑定了 2 个或以上账号，自动封禁
-              if (boundAccounts.length >= 2) {
-                await set(ref(db, 'banned_fingerprints/' + myFingerprint), {
-                  reason: '系统检测：同一设备注册过多账号，已自动限制',
-                  time: Date.now(),
-                  accounts: boundAccounts
-                });
-                return alert('🚫 该设备已被系统自动限制注册（同设备多账号检测）。\n如需申诉，请联系作者。');
-              }
-
-              // 正常注册流程
+            if (confirm(`账号 "${user}" 不存在，是否注册新账号？\n（注册后需等待作者审核通过才能登录）`)) {
               get(ref(db, 'users/' + user)).then((checkSnap) => {
                 if (checkSnap.exists()) {
                   alert("❌ 该用户名已被抢注，请换一个！");
@@ -413,23 +385,12 @@
                   set(ref(db, 'users/' + user), {
                     password: encryptedPass,
                     deviceId: myDeviceId,
-                    fingerprint: myFingerprint,
                     isAuthor: false,
                     level: 1,
-                    title: ""
+                    title: "",
+                    status: "pending"
                   }).then(() => {
-                    // 写入 fingerprint_map
-                    update(ref(db, 'fingerprint_map/' + myFingerprint + '/' + user), true).catch(() => {});
-                    myName = user;
-                    isAuthor = false;
-                    localStorage.setItem('chat_username', myName);
-                    initOnlineStatus();
-                    listenWarnings();
-                    listenGlobalMute();
-                    listenAllUsersData();
-                    listenPrivateUnreadBadge();
-                    showScreen('lobbyScreen');
-                    renderLobby();
+                    alert('✅ 注册成功！\n你的账号正在等待作者审核，通过后即可登录。');
                   });
                 }
               });
@@ -1625,7 +1586,6 @@
     .plaza-msg { background: rgba(255,255,255,0.05); border-radius: 12px; padding: 15px; border-left: 3px solid #ff00ff; margin-bottom: 10px;}
     .plaza-text { font-size: 15px; color: #ddd; line-height: 1.5; word-break: break-all; }
 
-    /* 未读消息红点样式 */
     .badge {
       position: absolute;
       top: -5px;
